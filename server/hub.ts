@@ -2,7 +2,8 @@
 // snapshots out to the board ("hive" topic) and chat events to watchers ("chat:<sid>").
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { adoptGoal, adoptName, historyToEvents, pickAdoptable } from "./adopt";
+import { adoptGoal, adoptName, historyToEvents, pickAdoptable, pickRompAdoptable } from "./adopt";
+import { readRompRegistry } from "./romp";
 import { AgentSession } from "./session";
 import { Store, type SessionRow } from "./store";
 import { EFFORTS, MODELS, type ChatEvent, type ClientOp, type Defaults, type ModelChoice, type ServerMsg, type SessionSnap } from "./proto";
@@ -57,25 +58,36 @@ export class Hub {
     }
     const known = this.store.allClaudeIds();
     for (const s of this.sessions.values()) if (s.claudeSessionId) known.add(s.claudeSessionId);
-    const picks = pickAdoptable(infos, known, {
+    // romp first: with a registry on this machine, the board mirrors romp's own set —
+    // same sessions, same names, same colors — so switching tools mid-work costs nothing
+    const romp = readRompRegistry();
+    const rules = {
       nowMs: Date.now(),
       days: Number(process.env.HIVE_ADOPT_DAYS || 7),
-      max: Number(process.env.HIVE_ADOPT_MAX || 12),
-    });
+      max: Number(process.env.HIVE_ADOPT_MAX || (romp.size ? 24 : 12)),
+    };
+    const picks = romp.size
+      ? pickRompAdoptable(infos, romp, known, rules)
+      : pickAdoptable(infos, known, rules);
     if (!picks.length) return;
     const used = new Set([...this.sessions.values()].map((s) => s.name));
     const d = this.store.getDefaults();
     for (const info of picks) {
-      const name = adoptName(info, used);
+      const r = romp.get(info.sessionId);
+      let name = r?.name || adoptName(info, used);
+      if (used.has(name)) name = adoptName({ ...info, customTitle: name }, used);
       used.add(name);
       const usedColors = new Set([...this.sessions.values()].map((x) => x.color.bg));
-      const bg = PALETTE.find((c) => !usedColors.has(c)) || PALETTE[hash(info.sessionId) % PALETTE.length];
+      const bg = r?.bg || PALETTE.find((c) => !usedColors.has(c)) || PALETTE[hash(info.sessionId) % PALETTE.length];
       const s = new AgentSession({
-        sid: randomUUID(), name, color: { bg, fg: fgFor(bg) },
-        model: "default", effort: d.effort, permMode: d.permMode,
-        cwd: info.cwd || process.env.HOME || process.cwd(),
+        sid: randomUUID(), name,
+        color: { bg, fg: r?.bg ? r.fg : fgFor(bg) },
+        model: r?.model || "default",
+        effort: r?.effort || d.effort,
+        permMode: r?.permMode || d.permMode,
+        cwd: r?.cwd || info.cwd || process.env.HOME || process.cwd(),
         claudeSessionId: info.sessionId,
-        createdT: Math.floor((info.createdAt || info.lastModified) / 1000),
+        createdT: r?.spawnedAt || Math.floor((info.createdAt || info.lastModified) / 1000),
         lastT: Math.floor(info.lastModified / 1000),
         goal: adoptGoal(info),
       });
