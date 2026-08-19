@@ -95,8 +95,11 @@ class Pad {
   private carryWant = new THREE.Vector3(); // scratch — no per-frame allocation
   private homeX = 0; private homeZ = 0;    // the pad's cell — eased toward, so a re-home GLIDES
   lift = 0;                                 // hover/press target offset, eased in update()
+  hover = false;                            // under the pointer: the selector ring answers
   portrait = false;                         // the close-up subject: face the viewer
   private liftCur = 0;
+  private selMat: THREE.LineBasicMaterial;  // the Switch-style accent selector outline
+  private sel: THREE.LineLoop;
   private ringColor = new THREE.Color(ST.ready);
   private ringTarget = new THREE.Color(ST.ready);
   private t = Math.random() * 100;          // free-running clock, de-synced per pad
@@ -148,6 +151,17 @@ class Pad {
     this.sonar = new THREE.LineLoop(hexLineGeo(PAD_R), this.sonarMat);
     this.sonar.position.y = this.ring.position.y;
     this.group.add(this.sonar);
+
+    // the SELECTOR: a second hex outline a hair outside the status ring, in the accent —
+    // the one "this is where your hand is" treatment (pulsing on hover, steady on the
+    // portrait subject). Accent for selection chrome only, never status.
+    this.selMat = new THREE.LineBasicMaterial({
+      color: ACCENT, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    this.sel = new THREE.LineLoop(hexLineGeo(PAD_R * 1.05), this.selMat);
+    this.sel.position.y = PAD_H + 0.03;
+    this.group.add(this.sel);
 
     this.labelMesh = makeNameDecal(sess.name, sess.color?.bg || "#cccccc");
     this.labelMesh.position.z = LABEL_FRONT;
@@ -233,6 +247,7 @@ class Pad {
   }
 
   pokeBean() { this.guy.poke(); }
+  wave() { this.guy.greet(); }
 
   // the nameplate is a click target (board rename) only when actually readable — an
   // invisible plate must never be a secret button, and hover already fades it in
@@ -247,6 +262,7 @@ class Pad {
   // move the pad's HOME to another cell (drag-to-re-home); update() glides it
   homeTo(x: number, z: number) { this.homeX = x; this.homeZ = z; }
   beanWorldPos(): THREE.Vector3 { return this.carrier.getWorldPosition(new THREE.Vector3()); }
+  beanWorldPosInto(v: THREE.Vector3): THREE.Vector3 { return this.carrier.getWorldPosition(v); }
   consumeBean() {
     this.guy.group.visible = false;
     this.carrier.position.set(0, 0, 0);
@@ -287,9 +303,14 @@ class Pad {
     if (this.carryTarget) this.carryWant.copy(this.carryTarget).sub(this.group.position);
     else this.carryWant.set(0, 0, 0);
     this.carrier.position.lerp(this.carryWant, 1 - Math.exp(-30 * dt));   // tight to the hand
-    const cs = this.carryTarget ? 1.12 : 1;
+    // juice: carried beans grow a size, hovered beans lean in a touch
+    const cs = this.carryTarget ? 1.12 : this.hover ? 1.05 : 1;
     this.carrier.scale.x = ease(this.carrier.scale.x, cs, dt, 12);
     this.carrier.scale.y = this.carrier.scale.z = this.carrier.scale.x;
+    // the selector: a gentle pulse under the pointer, a steady presence on the portrait
+    const selTarget = this.hover ? 0.42 + 0.22 * (0.5 + 0.5 * Math.sin(this.t * 4.6))
+      : this.portrait ? 0.3 : 0;
+    this.selMat.opacity = ease(this.selMat.opacity, selTarget, dt, 14);
 
     this.ringColor.lerp(this.ringTarget, 1 - Math.exp(-8 * dt));
     // a 1px line carries less light than a fat rim, so overdrive the color past 1 —
@@ -370,6 +391,7 @@ class Dweller {
   private phase = Math.random() * Math.PI * 2;
   private baseColor: THREE.Color;
   private pop = 0;                          // hatch flourish clock (opening → live)
+  private greetT = 0;                       // greeting-wave clock (portrait open)
   private squash = 1;                       // landing squash factor, springs back to 1
   private prevY = 0;
 
@@ -488,6 +510,12 @@ class Dweller {
     this.pop = Math.max(this.pop, 0.45);
   }
 
+  // the portrait greeting: one bright wave of the right arm, then back to work
+  greet() {
+    this.greetT = 0.9;
+    this.pop = Math.max(this.pop, 0.3);
+  }
+
   update(dt: number, t: number, camYaw: number) {
     const s = this.state;
     // blink (life for every state except the egg)
@@ -570,6 +598,13 @@ class Dweller {
           armLZ = 0.35 + 0.06 * Math.sin(t * 1.3 + this.phase);
           armRZ = -0.35 - 0.06 * Math.sin(t * 1.3 + this.phase);
         }
+    }
+    // the greeting outranks the pose's right arm for its moment — a clear, happy wave
+    if (this.greetT > 0) {
+      this.greetT -= dt;
+      const g = Math.min(1, (0.9 - this.greetT) * 6);   // raise fast, wave, lower with the clock
+      armRZ = -2.3 * g - 0.5 * Math.sin(t * 11) * g;
+      armRX = 0;
     }
     if (s !== "opening") { this.face.visible = true; this.armL.visible = true; this.armR.visible = true; }
     if (s !== "working") this.bodyMat.emissiveIntensity = 0.22;
@@ -972,6 +1007,7 @@ export class HiveWorld {
   private portraitSid: string | null = null;
   private fogCur = 0.013;
   private shiftCur = 0;
+  private tipV = new THREE.Vector3();       // scratch — the hot loop allocates nothing
   private fit: () => void;
 
   constructor(private root: HTMLElement, private bridge: Bridge) {
@@ -1401,6 +1437,7 @@ export class HiveWorld {
     if (prev) prev.portrait = false;
     this.portraitSid = sid;
     pad.portrait = true;
+    pad.wave();                              // they see you arrive — a little greeting
     this.dist = 3.1;
     this.pitch = 0.3;
     this.yaw = Math.round(this.yawCur / (Math.PI * 2)) * Math.PI * 2;   // face-on, shortest way
@@ -1660,17 +1697,17 @@ export class HiveWorld {
     const sid = wantPick ? this.pick().sid : this.hovered;
     if (sid !== this.hovered) {
       const old = this.hovered ? this.pads.get(this.hovered) : null;
-      if (old) old.lift = 0;
+      if (old) { old.lift = 0; old.hover = false; }
       this.hovered = sid;
       const nw = sid ? this.pads.get(sid) : null;
-      if (nw) nw.lift = 0.12;
+      if (nw) { nw.lift = 0.12; nw.hover = true; }
       this.renderer.domElement.style.cursor = sid ? "pointer" : "default";
     }
     // the hover tip rides the hovered bean, saying exactly what the card's state line
     // would — placed per frame (the bean bobs, the camera springs), text only on change
     const tipPad = this.hovered && !this.dragSession ? this.pads.get(this.hovered) : null;
     if (tipPad && tipPad.dyingT < 0) {
-      const p = tipPad.beanWorldPos();
+      const p = tipPad.beanWorldPosInto(this.tipV);
       p.y += 2.3;                            // above the bang's bob, clear of the head
       p.project(this.camera);
       if (p.z < 1) {

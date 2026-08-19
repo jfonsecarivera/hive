@@ -258,6 +258,10 @@ export class ChatDock {
       this.rows.clear();
       this.order = [];
       this.feed.replaceChildren();
+      // a replay is history, not arrivals — the whole batch lands still, and only
+      // rows born after it play the rise-in
+      this.feed.classList.add("bulk");
+      requestAnimationFrame(() => requestAnimationFrame(() => this.feed.classList.remove("bulk")));
     }
     for (const ev of events) this.upsert(ev);
     if (this.pinned) this.scrollToEnd(false);

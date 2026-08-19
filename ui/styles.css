@@ -167,7 +167,10 @@ button { font-family: inherit; }
 .ht-bean .hb-body { width: 26px; height: 30px; position: relative;
   border-radius: 46% 46% 44% 44% / 58% 58% 40% 40%;
   background: radial-gradient(circle at 35% 28%, #dfe9f5, #9fb3c8 78%);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4); }
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  transition: transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1.4); }
+.ht-bean:hover .hb-body { transform: translateY(-3px); }
+.ht-bean:active .hb-body { transform: translateY(-1px) scale(0.94); }
 .ht-bean.default .hb-body { box-shadow: 0 0 0 2px var(--accent), 0 2px 6px rgba(0, 0, 0, 0.4); }
 .ht-bean .hb-body i { position: absolute; top: 38%; width: 4px; height: 5px; border-radius: 50%;
   background: #10151c; }
@@ -237,12 +240,13 @@ button { font-family: inherit; }
 #chat-dock {
   position: fixed; top: 0; left: 0; bottom: 0; width: 460px; z-index: 10;
   display: flex; flex-direction: column;
-  background: rgba(11, 14, 19, 0.88);
+  /* flat glass, no backdrop blur: a full-height blur over an animating canvas
+     forces a recomposite every frame — the single biggest smoothness tax */
+  background: rgba(12, 15, 20, 0.93);
   border-right: 1px solid var(--hairline);
   box-shadow: 12px 0 40px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(14px);
   transform: translateX(-102%);
-  transition: transform 0.24s cubic-bezier(0.2, 0.9, 0.3, 1.05);
+  transition: transform 0.26s cubic-bezier(0.2, 0.9, 0.3, 1.06);
   font: 13px/1.5 var(--font); color: var(--text);
 }
 #chat-dock.open { transform: none; }
@@ -308,6 +312,17 @@ button { font-family: inherit; }
   display: flex; flex-direction: column; gap: 10px;
   overscroll-behavior: contain;
   scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.14) transparent;
+}
+
+/* every row arrives — a small rise-and-settle on insertion; upserts patch nodes in
+   place, so streaming never re-triggers it */
+.cd-feed > *, .m-act > * {
+  animation: row-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.12) both;
+}
+.cd-feed.bulk > *, .cd-feed.bulk .m-act > * { animation: none; }
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: none; }
 }
 
 /* user message: right-shifted block in the session's family */
@@ -400,6 +415,13 @@ button { font-family: inherit; }
   padding: 10px 12px;
   box-shadow: 0 0 18px rgba(229, 72, 77, 0.12);
 }
+/* an open ask breathes softly — the one card allowed to ask for your eye */
+.m-ask[data-status="open"] { animation: row-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.12) both,
+  ask-breathe 2.4s ease-in-out 0.3s infinite; }
+@keyframes ask-breathe {
+  0%, 100% { box-shadow: 0 0 14px rgba(229, 72, 77, 0.1); }
+  50% { box-shadow: 0 0 26px rgba(229, 72, 77, 0.22); }
+}
 .m-ask[data-status="done"] { border-color: rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.02);
   box-shadow: none; padding: 6px 10px; }
 .ask-title { font-weight: 600; color: #f2d7d8; margin-bottom: 2px; }
@@ -416,7 +438,9 @@ button { font-family: inherit; }
 .ask-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left;
   background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.13);
   border-radius: 8px; color: var(--text); padding: 7px 11px; cursor: pointer;
-  font: 13px var(--font); transition: border-color 0.1s, background 0.1s; }
+  font: 13px var(--font);
+  transition: border-color 0.1s, background 0.1s, transform 0.12s ease; }
+.ask-opt:active { transform: scale(0.985); }
 .ask-opt:hover { border-color: rgba(156, 210, 255, 0.5); background: rgba(156, 210, 255, 0.06); }
 .ask-opt.picked { border-color: var(--accent); background: rgba(156, 210, 255, 0.12); }
 .ask-opt .ao-label { font-weight: 600; }
@@ -487,5 +511,8 @@ button { font-family: inherit; }
   box-shadow: 0 0 0 2px rgba(156, 210, 255, 0.14); }
 #chat-dock .cd-send { flex: 0 0 auto; cursor: pointer; border: 0; border-radius: 9px;
   background: var(--accent); color: var(--accent-fg); font: 600 13px var(--font);
-  padding: 8px 15px; }
-#chat-dock .cd-send:hover { filter: brightness(1.08); }
+  padding: 8px 15px; transition: transform 0.12s ease, filter 0.12s ease; }
+#chat-dock .cd-send:hover { filter: brightness(1.08); transform: translateY(-1px); }
+#chat-dock .cd-send:active { transform: scale(0.96); }
+.ask-allow, .ask-go, .ask-always, .ask-deny { transition: transform 0.12s ease, background 0.12s ease; }
+.ask-allow:active, .ask-go:active, .ask-always:active, .ask-deny:active { transform: scale(0.96); }
