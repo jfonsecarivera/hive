@@ -9,7 +9,7 @@ import { join } from "node:path";
 process.env.HIVE_PORT = "4519";
 process.env.HIVE_HOME = mkdtempSync(join(tmpdir(), "hive-e2e-"));
 
-const srv = Bun.spawn(["bun", "run", join(import.meta.dir, "../server/main.ts")], {
+const srv = Bun.spawn([process.execPath, "run", join(import.meta.dir, "../server/main.ts")], {
   stdout: "pipe", stderr: "pipe",
   env: { ...process.env },
 });
