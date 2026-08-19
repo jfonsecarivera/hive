@@ -6,6 +6,7 @@
 // hive never elbows into a session some other process might be driving right now.
 import { basename } from "node:path";
 import type { SDKSessionInfo, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { toolTitle } from "./session";
 import type { ChatEvent } from "./proto";
 
 export interface AdoptRules {
@@ -23,12 +24,16 @@ export function pickAdoptable(
   rules: AdoptRules,
 ): SDKSessionInfo[] {
   const cutoff = rules.nowMs - rules.days * 86_400_000;
+  // the cap bounds the BOARD, not the scan: only the newest `max` of the window are
+  // ever adoptable, and known ids inside that set adopt nothing — they must NOT slide
+  // the window deeper (each rescan used to adopt the next `max` down, compounding
+  // 12 → 23 across restarts; seen live on 2026-08-19)
   return infos
-    .filter((i) => i.sessionId && !knownClaudeIds.has(i.sessionId))
-    .filter((i) => (i.lastModified || 0) >= cutoff)
+    .filter((i) => i.sessionId && (i.lastModified || 0) >= cutoff)
     .filter((i) => !!i.cwd && !SCRATCH_CWD.test(i.cwd))
     .sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0))
-    .slice(0, rules.max);
+    .slice(0, rules.max)
+    .filter((i) => !knownClaudeIds.has(i.sessionId));
 }
 
 // a bean's name: the user's own title when they set one, else the project directory —
@@ -61,28 +66,75 @@ function isPlumbing(text: string): boolean {
     t.startsWith("[Request interrupted");
 }
 
-function textOf(message: unknown): string {
-  const m = message as any;
-  const c = m?.content;
-  if (typeof c === "string") return c;
-  if (!Array.isArray(c)) return "";
-  return c.filter((b: any) => b?.type === "text" && typeof b.text === "string")
-    .map((b: any) => b.text).join("\n");
-}
-
-// The transcript tail as chat events: main-thread user/assistant text only — enough to
-// recognize the conversation at a glance. The full mechanics live in the transcript
-// itself, and the agent keeps ALL of it on resume regardless of what we show.
-export function historyToEvents(msgs: SessionMessage[], t: number, cap = 60): ChatEvent[] {
+// The transcript tail as chat events — the SAME vocabulary a live session streams:
+// user/assistant text, thinking folds, and tool rows with their inputs and results
+// (matched by tool_use_id). The agent keeps the full transcript on resume regardless
+// of how much we render.
+export function historyToEvents(msgs: SessionMessage[], t: number, cap = 120): ChatEvent[] {
   const out: ChatEvent[] = [];
+  const tools = new Map<string, Extract<ChatEvent, { k: "tool" }>>();
   for (const m of msgs) {
     if (m.parent_tool_use_id || m.parent_agent_id) continue;      // subagent internals
     if (m.type !== "user" && m.type !== "assistant") continue;
-    const text = textOf(m.message).trim();
-    if (!text || isPlumbing(text)) continue;
-    out.push(m.type === "user"
-      ? { k: "user", id: "h-" + m.uuid, t, text: text.slice(0, 4000) }
-      : { k: "text", id: "h-" + m.uuid, t, text: text.slice(0, 8000), done: true });
+    const content = (m.message as any)?.content;
+    if (typeof content === "string") {
+      const text = content.trim();
+      if (!text || isPlumbing(text)) continue;
+      out.push(m.type === "user"
+        ? { k: "user", id: "h-" + m.uuid, t, text: text.slice(0, 4000) }
+        : { k: "text", id: "h-" + m.uuid, t, text: text.slice(0, 8000), done: true });
+      continue;
+    }
+    if (!Array.isArray(content)) continue;
+    let bi = 0;
+    for (const b of content) {
+      const id = "h-" + m.uuid + ":" + bi++;
+      if (b?.type === "text" && typeof b.text === "string" && b.text.trim()) {
+        const text = b.text.trim();
+        if (isPlumbing(text)) continue;
+        out.push(m.type === "user"
+          ? { k: "user", id, t, text: text.slice(0, 4000) }
+          : { k: "text", id, t, text: text.slice(0, 8000), done: true });
+      } else if (b?.type === "thinking" && typeof b.thinking === "string" && b.thinking.trim()) {
+        out.push({ k: "think", id, t, text: b.thinking.trim().slice(0, 8000), done: true });
+      } else if (b?.type === "tool_use" && typeof b.id === "string") {
+        const ev: Extract<ChatEvent, { k: "tool" }> = {
+          k: "tool", id: "h-" + b.id, t, name: String(b.name || "tool"),
+          title: toolTitle(String(b.name || "tool"), b.input || {}),
+          input: histClip(pretty(b.input), 2000),
+          status: "ok",                       // history: assume completed unless the result says otherwise
+        };
+        tools.set(b.id, ev);
+        out.push(ev);
+      } else if (b?.type === "tool_result" && typeof b.tool_use_id === "string") {
+        const ev = tools.get(b.tool_use_id);
+        if (ev) {
+          ev.status = b.is_error ? "err" : "ok";
+          ev.output = histClip(resultText(b.content), 4000);
+        }
+      }
+    }
   }
   return out.slice(-cap);
+}
+
+function pretty(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+}
+
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((c: any) => (c?.type === "text" ? c.text : c?.type === "image" ? "(image)" : ""))
+      .filter(Boolean).join("\n");
+  }
+  return "";
+}
+
+function histClip(s: string, cap: number): string {
+  s = s.replace(/data:[a-z/+.-]+;base64,[A-Za-z0-9+/=]{64,}/g, "(base64 data)");
+  return s.length > cap ? s.slice(0, cap) + `\n… (${s.length - cap} more chars)` : s;
 }

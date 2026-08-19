@@ -35,6 +35,13 @@ describe("pickAdoptable", () => {
     const picks = pickAdoptable(infos, new Set(), { nowMs: NOW, days: 7, max: 2 });
     expect(picks.map((p) => p.sessionId)).toEqual(["s1", "s2"]);
   });
+
+  test("the cap bounds the BOARD: known ids inside the top-N never slide the window deeper", () => {
+    const infos = [1, 2, 3, 4].map((n) => info({ sessionId: "s" + n, lastModified: NOW - n * DAY }));
+    // first scan adopted s1+s2; a rescan must adopt NOTHING, not s3+s4
+    const picks = pickAdoptable(infos, new Set(["s1", "s2"]), { nowMs: NOW, days: 7, max: 2 });
+    expect(picks).toEqual([]);
+  });
 });
 
 describe("adoptName / adoptGoal", () => {
@@ -61,20 +68,38 @@ describe("historyToEvents", () => {
     ...over,
   } as SessionMessage);
 
-  test("keeps main-thread text, drops tool results, subagents, and plumbing", () => {
+  test("keeps the full main-thread story: text, thinking, tools with results", () => {
     const evs = historyToEvents([
       msg("user", "build the parser"),
-      msg("assistant", [{ type: "text", text: "On it." }, { type: "tool_use", id: "t", name: "Bash", input: {} }]),
-      msg("user", [{ type: "tool_result", tool_use_id: "t", content: "ok" }]),   // no text → dropped
+      msg("assistant", [
+        { type: "thinking", thinking: "plan it out" },
+        { type: "text", text: "On it." },
+        { type: "tool_use", id: "t1", name: "Bash", input: { command: "make parser" } },
+      ]),
+      msg("user", [{ type: "tool_result", tool_use_id: "t1", content: "built fine" }]),
       msg("assistant", [{ type: "text", text: "sub" }], { parent_agent_id: "agent-1" }),
       msg("user", "<command-name>/clear</command-name>"),
       msg("user", "Caveat: local commands below"),
       msg("assistant", [{ type: "text", text: "Done — parser builds." }]),
     ], 500);
-    expect(evs.map((e) => e.k)).toEqual(["user", "text", "text"]);
-    expect((evs[0] as any).text).toBe("build the parser");
-    expect((evs[2] as any).text).toBe("Done — parser builds.");
+    expect(evs.map((e) => e.k)).toEqual(["user", "think", "text", "tool", "text"]);
+    const tool = evs[3] as any;
+    expect(tool.title).toBe("$ make parser");
+    expect(tool.status).toBe("ok");
+    expect(tool.output).toBe("built fine");
     expect(evs.every((e) => e.t === 500)).toBe(true);
+  });
+
+  test("a failed tool result marks the row err; a resultless tool stays ok", () => {
+    const evs = historyToEvents([
+      msg("assistant", [
+        { type: "tool_use", id: "t1", name: "Read", input: { file_path: "/a" } },
+        { type: "tool_use", id: "t2", name: "Read", input: { file_path: "/b" } },
+      ]),
+      msg("user", [{ type: "tool_result", tool_use_id: "t1", content: "no such file", is_error: true }]),
+    ], 1);
+    expect((evs[0] as any).status).toBe("err");
+    expect((evs[1] as any).status).toBe("ok");
   });
 
   test("caps to the tail", () => {
