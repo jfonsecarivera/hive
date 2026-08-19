@@ -344,6 +344,8 @@ export class AgentSession {
     switch (m.type) {
       case "system":
         if (m.subtype === "init") {
+          // an adopted session starts as "default" — the init names the real model
+          if ((!this.model || this.model === "default") && m.model) this.model = m.model;
           if (this.state === "opening") this.settle();
           this.onChange(this.sid);
         } else if (m.subtype === "status") {

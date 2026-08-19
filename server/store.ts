@@ -76,6 +76,15 @@ export class Store {
     return this.db.query("SELECT * FROM sessions WHERE archived = 0 ORDER BY created_t").all() as SessionRow[];
   }
 
+  // every claude session id hive has EVER tracked, archived included: a bean the user
+  // trashed must stay gone — adoption never resurrects a deliberate end
+  allClaudeIds(): Set<string> {
+    const rows = this.db.query(
+      "SELECT claude_session_id AS id FROM sessions WHERE claude_session_id IS NOT NULL",
+    ).all() as { id: string }[];
+    return new Set(rows.map((r) => r.id));
+  }
+
   putEvent(sid: string, ev: ChatEvent) {
     this.db.query(`
       INSERT INTO chat(sid,id,t,seq,json) VALUES($sid,$id,$t,$seq,$json)

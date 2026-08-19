@@ -2,6 +2,7 @@
 // snapshots out to the board ("hive" topic) and chat events to watchers ("chat:<sid>").
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
+import { adoptGoal, adoptName, historyToEvents, pickAdoptable } from "./adopt";
 import { AgentSession } from "./session";
 import { Store, type SessionRow } from "./store";
 import { EFFORTS, MODELS, type ChatEvent, type ClientOp, type Defaults, type ModelChoice, type ServerMsg, type SessionSnap } from "./proto";
@@ -39,6 +40,67 @@ export class Hub {
     }
     // faded is time-derived (ready >1h): a slow re-publish keeps the doze cue honest
     setInterval(() => this.publishHive(), 60_000);
+    // adopt the machine's existing Claude Code sessions (romp, terminal, anything) as
+    // dormant beans — at boot and then on a slow rescan for sessions born elsewhere
+    void this.adopt();
+    setInterval(() => void this.adopt(), 600_000);
+  }
+
+  private async adopt() {
+    if (process.env.HIVE_ADOPT === "0") return;
+    let infos;
+    try {
+      const sdk = await import("@anthropic-ai/claude-agent-sdk");
+      infos = await sdk.listSessions();
+    } catch (e) {
+      console.error("adopt: could not list existing sessions:", e);
+      return;
+    }
+    const known = this.store.allClaudeIds();
+    for (const s of this.sessions.values()) if (s.claudeSessionId) known.add(s.claudeSessionId);
+    const picks = pickAdoptable(infos, known, {
+      nowMs: Date.now(),
+      days: Number(process.env.HIVE_ADOPT_DAYS || 7),
+      max: Number(process.env.HIVE_ADOPT_MAX || 12),
+    });
+    if (!picks.length) return;
+    const used = new Set([...this.sessions.values()].map((s) => s.name));
+    const d = this.store.getDefaults();
+    for (const info of picks) {
+      const name = adoptName(info, used);
+      used.add(name);
+      const usedColors = new Set([...this.sessions.values()].map((x) => x.color.bg));
+      const bg = PALETTE.find((c) => !usedColors.has(c)) || PALETTE[hash(info.sessionId) % PALETTE.length];
+      const s = new AgentSession({
+        sid: randomUUID(), name, color: { bg, fg: fgFor(bg) },
+        model: "default", effort: d.effort, permMode: d.permMode,
+        cwd: info.cwd || process.env.HOME || process.cwd(),
+        claudeSessionId: info.sessionId,
+        createdT: Math.floor((info.createdAt || info.lastModified) / 1000),
+        lastT: Math.floor(info.lastModified / 1000),
+        goal: adoptGoal(info),
+      });
+      this.wire(s);
+      this.sessions.set(s.sid, s);
+      this.persist(s.sid);
+      const t = Math.floor(info.lastModified / 1000);
+      this.store.putEvent(s.sid, {
+        k: "note", id: "adopted", t,
+        text: `adopted from an existing Claude Code session on this machine — recent history below; ` +
+          `sending a message resumes it with its full context (claude --resume ${info.sessionId})`,
+        tone: "info",
+      });
+      // backfill the readable tail, unless the transcript is huge (adoption must stay cheap)
+      if ((info.fileSize ?? 0) < 20 * 1024 * 1024) {
+        try {
+          const sdk = await import("@anthropic-ai/claude-agent-sdk");
+          const msgs = await sdk.getSessionMessages(info.sessionId);
+          for (const ev of historyToEvents(msgs, t)) this.store.putEvent(s.sid, ev);
+        } catch { /* the note above still explains where the history lives */ }
+      }
+    }
+    console.log(`adopted ${picks.length} existing session${picks.length === 1 ? "" : "s"}`);
+    this.publishHive();
   }
 
   private wire(s: AgentSession) {
