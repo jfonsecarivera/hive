@@ -1021,7 +1021,7 @@ export class HiveWorld {
   private lastFps = 60; private lastWorstMs = 16;
   private lastWorkMs = 0; private lastWorkWorstMs = 0;
   private fastWins = 0;                     // consecutive light windows → recover a level
-  private cappedSaid = false;
+  private capEl: HTMLElement;               // standing "browser is rationing frames" chip
   private gpu = "";
   private hud: HTMLElement | null = null;
   private fit: () => void;
@@ -1112,6 +1112,12 @@ export class HiveWorld {
     this.noteEl = document.createElement("div");
     this.noteEl.id = "hive-note";
     document.body.appendChild(this.noteEl);
+
+    // a STANDING condition gets a standing chip, not a toast: shown exactly while the
+    // browser rations frames despite light work (Energy Saver / Low Power Mode)
+    this.capEl = document.createElement("div");
+    this.capEl.id = "cap-chip";
+    document.body.appendChild(this.capEl);
 
     // the empty-board hint: a hive with zero sessions must SAY so and say what to do —
     // an unexplained empty board reads as "my beans vanished" (the user 2026-08-19)
@@ -1762,12 +1768,13 @@ export class HiveWorld {
           } else {
             this.fastWins = 0;
           }
-          // slow frames while our work is light: the BROWSER is rationing frames
-          // (Energy Saver / Low Power Mode) — say it once, plainly
-          if (!this.cappedSaid && this.lastFps < 45 && this.lastWorkMs < 8) {
-            this.cappedSaid = true;
-            this.note(`your browser is limiting animation to ~${Math.round(this.lastFps)}fps ` +
-              `(hive's own frame cost is ${this.lastWorkMs.toFixed(1)}ms) — likely Energy Saver or Low Power Mode`);
+          // slow frames while our work is light: the BROWSER is rationing frames —
+          // the chip stands exactly as long as the condition does
+          const capped = this.lastFps < 45 && this.lastWorkMs < 8;
+          this.capEl.classList.toggle("show", capped);
+          if (capped) {
+            this.capEl.textContent = `browser limiting animation to ~${Math.round(this.lastFps)}fps ` +
+              `(hive: ${this.lastWorkMs.toFixed(1)}ms/frame) — check Energy Saver / Low Power Mode`;
           }
           if (this.hud) {
             this.hud.textContent = `${Math.round(this.lastFps)} fps · work ${this.lastWorkMs.toFixed(1)}ms ` +
