@@ -46,6 +46,25 @@ button { font-family: inherit; }
 }
 #conn.show { transform: translateX(-50%) translateY(0); }
 
+/* which machine's hive this is — quiet, always in the same corner */
+#host-badge {
+  position: fixed; top: 12px; left: 14px; z-index: 4; pointer-events: none;
+  color: rgba(156, 210, 255, 0.55);
+  font: 600 12px var(--font); letter-spacing: 0.14em; text-transform: lowercase;
+}
+#host-badge::before { content: "⬡ "; }
+
+/* the empty-board hint: a hive with zero sessions says so and points at the tray */
+#hive-empty {
+  position: fixed; left: 50%; top: 42%; transform: translate(-50%, -50%);
+  z-index: 3; pointer-events: none; text-align: center;
+  display: flex; flex-direction: column; gap: 6px;
+  opacity: 0; transition: opacity 0.4s ease;
+}
+#hive-empty.show { opacity: 1; }
+#hive-empty b { font: 600 15px var(--font); color: rgba(215, 220, 227, 0.85); }
+#hive-empty span { font: 13px var(--font); color: rgba(154, 160, 166, 0.75); }
+
 /* press-pulse for delegated actions (ui/actions.ts flash) */
 .acted { animation: acted-pulse 0.26s ease; }
 @keyframes acted-pulse {

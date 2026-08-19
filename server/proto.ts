@@ -94,7 +94,7 @@ export type ServerMsg =
   | { type: "hive"; sessions: SessionSnap[] }
   | { type: "chat"; sid: string; reset?: boolean; events: ChatEvent[] }
   | { type: "caps"; sid: string; commands: CmdInfo[] }
-  | { type: "defaults"; defaults: Defaults; models: ModelChoice[]; efforts: string[] }
+  | { type: "defaults"; host: string; defaults: Defaults; models: ModelChoice[]; efforts: string[] }
   | { type: "err"; sid?: string; title: string; text?: string }
   | { type: "warn"; sid?: string; text: string };
 

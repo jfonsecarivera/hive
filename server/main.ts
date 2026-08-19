@@ -23,15 +23,18 @@ const server = Bun.serve<WsData>({
         ? undefined
         : new Response("upgrade failed", { status: 400 });
     }
+    // no-cache everywhere: a redeployed hive must never leave a browser holding a
+    // stale bundle that quietly misrepresents the board
+    const fresh = { "Cache-Control": "no-cache" };
     if (url.pathname === "/" || url.pathname === "/index.html") {
-      return new Response(Bun.file(join(ROOT, "ui/index.html")));
+      return new Response(Bun.file(join(ROOT, "ui/index.html")), { headers: fresh });
     }
     if (url.pathname === "/styles.css") {
-      return new Response(Bun.file(join(ROOT, "ui/styles.css")));
+      return new Response(Bun.file(join(ROOT, "ui/styles.css")), { headers: fresh });
     }
     if (url.pathname.startsWith("/dist/")) {
       const f = Bun.file(join(ROOT, "dist", url.pathname.slice(6)));
-      return (await f.exists()) ? new Response(f) : new Response("not found", { status: 404 });
+      return (await f.exists()) ? new Response(f, { headers: fresh }) : new Response("not found", { status: 404 });
     }
     if (url.pathname === "/models") {
       const d = hub.store.getDefaults();

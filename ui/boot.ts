@@ -26,6 +26,11 @@ conn.textContent = "reconnecting…";
 document.body.appendChild(conn);
 net.onStatus = (up) => conn.classList.toggle("show", !up);
 
+// which machine's hive this tab is — two boards in two tabs are otherwise identical
+const badge = document.createElement("div");
+badge.id = "host-badge";
+document.body.appendChild(badge);
+
 let first = true;
 net.on((m: ServerMsg) => {
   switch (m.type) {
@@ -43,6 +48,8 @@ net.on((m: ServerMsg) => {
       break;
     case "defaults":
       tray.setChoices(m.models, m.efforts, m.defaults);
+      document.title = "hive @ " + m.host;
+      badge.textContent = m.host;
       break;
     case "err":
       if (world.card.sid && (!m.sid || m.sid === world.card.sid)) {

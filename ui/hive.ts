@@ -925,6 +925,7 @@ export class HiveWorld {
   private tipText = "";
   private noteEl: HTMLElement;
   private noteT = 0;
+  private emptyEl!: HTMLElement;
   private ghostRingMat = new THREE.LineBasicMaterial({
     color: ACCENT, transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending, depthWrite: false,
   });
@@ -1019,6 +1020,14 @@ export class HiveWorld {
     this.noteEl = document.createElement("div");
     this.noteEl.id = "hive-note";
     document.body.appendChild(this.noteEl);
+
+    // the empty-board hint: a hive with zero sessions must SAY so and say what to do —
+    // an unexplained empty board reads as "my beans vanished" (the user 2026-08-19)
+    this.emptyEl = document.createElement("div");
+    this.emptyEl.id = "hive-empty";
+    this.emptyEl.innerHTML = "<b>no sessions on this hive yet</b>" +
+      "<span>drag a bean from the tray onto a hexagon to hatch one</span>";
+    document.body.appendChild(this.emptyEl);
 
     this.fit = () => {
       const w = root.clientWidth || 1, h = root.clientHeight || 1;
@@ -1531,6 +1540,7 @@ export class HiveWorld {
     // …and keep the one-layer lattice one ring wider than anything on it
     this.ensureLattice(Math.max(3, ringOf(Math.max(free, ...this.slots.values())) + 1));
 
+    this.emptyEl.classList.toggle("show", sessions.length === 0);
     if (first || diff.added.length || diff.removed.length) {
       if (this.selected === null) this.frameAll();
     }

@@ -1,6 +1,7 @@
 // The session registry: creates/revives sessions, persists every change, and fans
 // snapshots out to the board ("hive" topic) and chat events to watchers ("chat:<sid>").
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { AgentSession } from "./session";
 import { Store, type SessionRow } from "./store";
 import { EFFORTS, MODELS, type ChatEvent, type ClientOp, type Defaults, type ModelChoice, type ServerMsg, type SessionSnap } from "./proto";
@@ -91,8 +92,12 @@ export class Hub {
   }
 
   defaultsMsg(): string {
+    // which machine's hive this is — two identical boards in two tabs are
+    // indistinguishable without it (the user 2026-08-19, whose empty devbox board
+    // read as their local beans having vanished)
     return JSON.stringify({
-      type: "defaults", defaults: this.store.getDefaults(),
+      type: "defaults", host: (process.env.HIVE_NAME || hostname()).replace(/\.local$/, ""),
+      defaults: this.store.getDefaults(),
       models: this.models, efforts: [...EFFORTS],
     } satisfies ServerMsg);
   }
