@@ -43,8 +43,14 @@ export function adoptName(info: SDKSessionInfo, used: ReadonlySet<string>): stri
 }
 
 export function adoptGoal(info: SDKSessionInfo): string | null {
-  const g = (info.summary || info.firstPrompt || "").trim().split("\n")[0].slice(0, 96);
-  return g || null;
+  // the first line that SAYS something — banner lines of #/=/- decoration carry nothing
+  for (const src of [info.summary, info.firstPrompt]) {
+    for (const line of (src || "").split("\n")) {
+      const t = line.trim();
+      if (/[A-Za-z0-9]/.test(t)) return t.slice(0, 96);
+    }
+  }
+  return null;
 }
 
 // harness plumbing that reads as noise in a chat backfill (command echoes, caveats)

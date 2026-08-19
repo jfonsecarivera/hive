@@ -44,10 +44,12 @@ describe("adoptName / adoptGoal", () => {
     expect(adoptName(info({}), new Set(["notes-api", "notes-api-2"]))).toBe("notes-api-3");
   });
 
-  test("goal is the summary's first line, else the first prompt", () => {
+  test("goal is the summary's first MEANINGFUL line, else the first prompt's", () => {
     expect(adoptGoal(info({}))).toBe("Fix the flaky import test");
     expect(adoptGoal(info({ summary: "", firstPrompt: "add retry logic\nplease" })))
       .toBe("add retry logic");
+    expect(adoptGoal(info({ summary: "#####\n=====\nreal task here" }))).toBe("real task here");
+    expect(adoptGoal(info({ summary: "####", firstPrompt: "do the thing" }))).toBe("do the thing");
     expect(adoptGoal(info({ summary: "", firstPrompt: "" }))).toBeNull();
   });
 });
