@@ -1,0 +1,22 @@
+{
+  "name": "hive",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run server/main.ts",
+    "dev": "bun --watch server/main.ts",
+    "build": "bun run scripts/build.ts",
+    "typecheck": "bun x tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.236",
+    "three": "0.185.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/three": "0.185.4",
+    "typescript": "^5.9.0"
+  }
+}
