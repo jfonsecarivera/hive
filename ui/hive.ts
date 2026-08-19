@@ -1008,13 +1008,20 @@ export class HiveWorld {
   private fogCur = 0.013;
   private shiftCur = 0;
   private tipV = new THREE.Vector3();       // scratch — the hot loop allocates nothing
-  // the quality governor: measured frame times (RAW, unclamped) step effects down until
-  // the frame rate holds — a stable 60 beats prettier pixels, silently (never back up:
-  // oscillating quality is worse than either level)
+  // The quality governor separates two different facts (conflating them stripped the
+  // neon for nothing, 2026-08-19): the frame INTERVAL (how often the browser gives us a
+  // frame — Energy Saver / Low Power Mode caps this at ~30Hz and no quality change can
+  // move it) and our frame WORK (the milliseconds we spend inside the frame — the only
+  // thing quality controls). Step down only when WORK is the cost; step back up, with
+  // hysteresis, when it clearly isn't; say it out loud when the browser is the limiter.
   private quality = 2;                      // 2 full · 1 DPR1+lean bloom · 0 no bloom
   private lastRaw = -1;
   private ftAcc = 0; private ftN = 0; private ftWorst = 0;
+  private workAcc = 0; private workWorst = 0;
   private lastFps = 60; private lastWorstMs = 16;
+  private lastWorkMs = 0; private lastWorkWorstMs = 0;
+  private fastWins = 0;                     // consecutive light windows → recover a level
+  private cappedSaid = false;
   private gpu = "";
   private hud: HTMLElement | null = null;
   private fit: () => void;
@@ -1140,6 +1147,7 @@ export class HiveWorld {
       if (!this.running) return;
       const body = JSON.stringify({
         fps: Math.round(this.lastFps), worstMs: Math.round(this.lastWorstMs),
+        workMs: Number(this.lastWorkMs.toFixed(1)), workWorstMs: Math.round(this.lastWorkWorstMs),
         q: this.quality, pads: this.pads.size, gpu: this.gpu.slice(0, 80),
       });
       fetch("/perf", { method: "POST", headers: { "content-type": "application/json" }, body })
@@ -1719,20 +1727,21 @@ export class HiveWorld {
     }
   }
 
-  // step effects down; never back up (oscillation reads worse than either level)
+  // apply ALL of a level's parameters (idempotent), so the governor can move both ways
   private setQuality(q: number) {
     this.quality = q;
-    if (q <= 1) this.renderer.setPixelRatio(1);
-    if (q === 1) this.bloom.strength = 0.55;
-    if (q === 0) this.bloom.enabled = false;
+    this.renderer.setPixelRatio(q === 2 ? Math.min(window.devicePixelRatio || 1, 1.5) : 1);
+    this.bloom.enabled = q > 0;
+    this.bloom.strength = q === 2 ? 0.7 : 0.55;
     this.fit();
-    console.info(`[hive] quality → ${q} (holding the frame rate)`);
+    console.info(`[hive] quality → ${q}`);
   }
 
   private frame = (now: number) => {
     if (!this.running) return;
+    const t0 = performance.now();
     const dt = frameDt(now, this.lastFrame);
-    // the governor reads RAW deltas (frameDt clamps at 50ms — real stalls are bigger)
+    // the stats read RAW deltas (frameDt clamps at 50ms — real stalls are bigger)
     if (this.lastRaw >= 0) {
       const raw = (now - this.lastRaw) / 1000;
       if (raw > 0 && raw < 2) {
@@ -1741,11 +1750,31 @@ export class HiveWorld {
         if (this.ftN >= 90) {
           this.lastFps = this.ftN / this.ftAcc;
           this.lastWorstMs = this.ftWorst * 1000;
-          if (this.lastFps < 45 && this.quality > 0) this.setQuality(this.quality - 1);
+          this.lastWorkMs = this.workAcc / this.ftN;
+          this.lastWorkWorstMs = this.workWorst;
+          // WORK-bound → trade fidelity. Light → win the level back (three calm
+          // windows in a row, so recovery can't flap).
+          if (this.lastWorkMs > 11 && this.quality > 0) {
+            this.fastWins = 0;
+            this.setQuality(this.quality - 1);
+          } else if (this.lastWorkMs < 6 && this.quality < 2) {
+            if (++this.fastWins >= 3) { this.fastWins = 0; this.setQuality(this.quality + 1); }
+          } else {
+            this.fastWins = 0;
+          }
+          // slow frames while our work is light: the BROWSER is rationing frames
+          // (Energy Saver / Low Power Mode) — say it once, plainly
+          if (!this.cappedSaid && this.lastFps < 45 && this.lastWorkMs < 8) {
+            this.cappedSaid = true;
+            this.note(`your browser is limiting animation to ~${Math.round(this.lastFps)}fps ` +
+              `(hive's own frame cost is ${this.lastWorkMs.toFixed(1)}ms) — likely Energy Saver or Low Power Mode`);
+          }
           if (this.hud) {
-            this.hud.textContent = `${Math.round(this.lastFps)} fps · worst ${Math.round(this.lastWorstMs)}ms · q${this.quality} · ${this.pads.size} pads`;
+            this.hud.textContent = `${Math.round(this.lastFps)} fps · work ${this.lastWorkMs.toFixed(1)}ms ` +
+              `(worst ${Math.round(this.lastWorkWorstMs)}) · q${this.quality} · ${this.pads.size} pads`;
           }
           this.ftAcc = 0; this.ftN = 0; this.ftWorst = 0;
+          this.workAcc = 0; this.workWorst = 0;
         }
       }
     }
@@ -1881,6 +1910,10 @@ export class HiveWorld {
     this.particles.update(dt);
 
     this.composer.render();
+    // our slice of the frame, render submission included — what the governor governs
+    const work = performance.now() - t0;
+    this.workAcc += work;
+    if (work > this.workWorst) this.workWorst = work;
     requestAnimationFrame(this.frame);
   };
 }
