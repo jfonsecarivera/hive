@@ -264,7 +264,19 @@ export class ChatDock {
       requestAnimationFrame(() => requestAnimationFrame(() => this.feed.classList.remove("bulk")));
     }
     for (const ev of events) this.upsert(ev);
-    if (this.pinned) this.scrollToEnd(false);
+    this.queueScroll();
+  }
+
+  // follow-scroll once per FRAME, not per message — scrollTop forces a layout flush,
+  // and streaming used to pay it a dozen times a second
+  private scrollQueued = false;
+  private queueScroll() {
+    if (this.scrollQueued) return;
+    this.scrollQueued = true;
+    requestAnimationFrame(() => {
+      this.scrollQueued = false;
+      if (this.pinned) this.feed.scrollTop = this.feed.scrollHeight;
+    });
   }
 
   private upsert(ev: ChatEvent) {
@@ -310,16 +322,27 @@ export class ChatDock {
         d.textContent = ev.text;
         break;
       case "text":
-        d.className = "m-asst md" + (ev.done ? "" : " streaming");
-        d.innerHTML = renderMarkdown(ev.text);
-        this.decorateCode(d);
+        // streaming text renders as PLAIN TEXT (one text node, delta-appended) and only
+        // settles into markdown ONCE, on done — re-parsing the whole message into
+        // innerHTML every flush stalled the main thread the world animates on
+        if (ev.done) {
+          d.className = "m-asst md";
+          d.innerHTML = renderMarkdown(ev.text);
+          this.decorateCode(d);
+        } else {
+          d.className = "m-asst raw streaming";
+          d.textContent = ev.text;
+          d.dataset.len = String(ev.text.length);
+        }
         break;
       case "think": {
         d.className = "m-think" + (ev.done ? "" : " streaming");
         d.innerHTML = '<button class="th-head" data-act="fold"><span class="th-tw">▸</span> <span class="th-label"></span></button>' +
-          '<div class="t-body md" hidden></div>';
+          '<div class="t-body" hidden></div>';
         (d.querySelector(".th-label") as HTMLElement).textContent = ev.done ? "thought" : "thinking…";
-        (d.querySelector(".t-body") as HTMLElement).innerHTML = renderMarkdown(ev.text);
+        const body = d.querySelector(".t-body") as HTMLElement;
+        if (ev.done) { body.classList.add("md"); body.innerHTML = renderMarkdown(ev.text); }
+        else { body.classList.add("raw"); body.textContent = ev.text; }
         break;
       }
       case "tool":
@@ -361,13 +384,28 @@ export class ChatDock {
   private patch(row: Row, ev: ChatEvent) {
     const el = row.el;
     if (ev.k === "text") {
-      el.className = "m-asst md" + (ev.done ? "" : " streaming");
-      el.innerHTML = renderMarkdown(ev.text);
-      this.decorateCode(el);
+      if (ev.done) {
+        el.className = "m-asst md";
+        delete el.dataset.len;
+        el.innerHTML = renderMarkdown(ev.text);
+        this.decorateCode(el);
+      } else {
+        el.className = "m-asst raw streaming";
+        appendDelta(el, ev.text);
+      }
     } else if (ev.k === "think") {
       el.classList.toggle("streaming", !ev.done);
       (el.querySelector(".th-label") as HTMLElement).textContent = ev.done ? "thought" : "thinking…";
-      (el.querySelector(".t-body") as HTMLElement).innerHTML = renderMarkdown(ev.text);
+      const body = el.querySelector(".t-body") as HTMLElement;
+      if (ev.done) {
+        body.classList.remove("raw");
+        body.classList.add("md");
+        delete body.dataset.len;
+        body.innerHTML = renderMarkdown(ev.text);
+      } else {
+        body.classList.add("raw");
+        appendDelta(body, ev.text);
+      }
     } else if (ev.k === "tool") {
       this.patchTool(el, ev);
     } else if (ev.k === "ask") {
@@ -585,4 +623,17 @@ export class ChatDock {
 
 function escText(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// grow a streaming node by its DELTA — appendData on the existing text node instead of
+// rebuilding the subtree; falls back to a full set when the text didn't simply grow
+function appendDelta(el: HTMLElement, text: string) {
+  const prev = Number(el.dataset.len || 0);
+  const first = el.firstChild;
+  if (prev > 0 && text.length >= prev && first && first.nodeType === Node.TEXT_NODE) {
+    if (text.length > prev) (first as Text).appendData(text.slice(prev));
+  } else {
+    el.textContent = text;
+  }
+  el.dataset.len = String(text.length);
 }

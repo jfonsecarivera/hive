@@ -38,7 +38,10 @@ net.on((m: ServerMsg) => {
     case "hive":
       world.sync(m.sessions, first);
       dock.refresh(m.sessions);
-      if (first && splash) splash.classList.add("gone");
+      if (first && splash) {
+        splash.classList.add("gone");
+        setTimeout(() => splash.remove(), 450);   // its spin animation must not tick forever
+      }
       first = false;
       break;
     case "chat":

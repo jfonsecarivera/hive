@@ -65,6 +65,12 @@ button { font-family: inherit; }
 #hive-empty b { font: 600 15px var(--font); color: rgba(215, 220, 227, 0.85); }
 #hive-empty span { font: 13px var(--font); color: rgba(154, 160, 166, 0.75); }
 
+/* the live frame-rate readout (#perf in the URL) */
+#perf-hud { position: fixed; right: 14px; top: 12px; z-index: 30; pointer-events: none;
+  font: 11px var(--mono); color: rgba(156, 210, 255, 0.7);
+  background: rgba(12, 15, 20, 0.8); border: 1px solid var(--hairline);
+  border-radius: 6px; padding: 3px 8px; }
+
 /* press-pulse for delegated actions (ui/actions.ts flash) */
 .acted { animation: acted-pulse 0.26s ease; }
 @keyframes acted-pulse {
@@ -336,8 +342,10 @@ button { font-family: inherit; }
   color: #e3edf7;
 }
 
-/* assistant prose */
+/* assistant prose; while STREAMING it's one plain text node (cheap to grow) that
+   settles into markdown on completion */
 .m-asst { max-width: 100%; word-break: break-word; }
+.m-asst.raw, .t-body.raw { white-space: pre-wrap; }
 .m-asst.streaming::after { content: "▋"; color: var(--accent); animation: caret 1s steps(1) infinite;
   margin-left: 2px; }
 @keyframes caret { 50% { opacity: 0; } }
@@ -415,13 +423,14 @@ button { font-family: inherit; }
   padding: 10px 12px;
   box-shadow: 0 0 18px rgba(229, 72, 77, 0.12);
 }
-/* an open ask breathes softly — the one card allowed to ask for your eye */
-.m-ask[data-status="open"] { animation: row-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.12) both,
-  ask-breathe 2.4s ease-in-out 0.3s infinite; }
-@keyframes ask-breathe {
-  0%, 100% { box-shadow: 0 0 14px rgba(229, 72, 77, 0.1); }
-  50% { box-shadow: 0 0 26px rgba(229, 72, 77, 0.22); }
-}
+/* an open ask breathes softly — the one card allowed to ask for your eye. The glow
+   animates as OPACITY on a pseudo-element (compositor-only; animating box-shadow
+   itself repaints the card every frame) */
+.m-ask { position: relative; }
+.m-ask::after { content: ""; position: absolute; inset: -1px; border-radius: 10px;
+  box-shadow: 0 0 26px rgba(229, 72, 77, 0.25); opacity: 0; pointer-events: none; }
+.m-ask[data-status="open"]::after { animation: ask-breathe 2.4s ease-in-out infinite; }
+@keyframes ask-breathe { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
 .m-ask[data-status="done"] { border-color: rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.02);
   box-shadow: none; padding: 6px 10px; }
 .ask-title { font-weight: 600; color: #f2d7d8; margin-bottom: 2px; }

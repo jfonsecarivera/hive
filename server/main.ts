@@ -1,6 +1,7 @@
 // hive — a small command center for Claude Code sessions. One Bun process: static UI,
 // a /models endpoint, and one WebSocket per browser with topic fanout (hive board +
 // per-session chats). Run it where the agents should live; open it from anywhere.
+import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildUi, ROOT } from "./build";
 import { Hub } from "./hub";
@@ -41,6 +42,14 @@ const server = Bun.serve<WsData>({
       return Response.json({ models: hub.modelChoices(), efforts: EFFORTS.map((e) => ({ value: e })), defaults: { model: d.model, effort: d.effort } });
     }
     if (url.pathname === "/healthz") return Response.json({ ok: true, sessions: hub.sessions.size });
+    if (url.pathname === "/perf" && req.method === "POST") {
+      // the client's measured frame stats — the authoritative answer to "is it laggy",
+      // logged AND kept in ~/.hive/perf.log so any machine's numbers can be read later
+      const line = `${new Date().toISOString()} ${(await req.text()).slice(0, 400)}`;
+      console.log("[perf]", line);
+      try { appendFileSync(join(process.env.HIVE_HOME || join(process.env.HOME || ".", ".hive"), "perf.log"), line + "\n"); } catch { /* log only */ }
+      return Response.json({ ok: true });
+    }
     return new Response("not found", { status: 404 });
   },
   websocket: {

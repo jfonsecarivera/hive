@@ -1008,6 +1008,15 @@ export class HiveWorld {
   private fogCur = 0.013;
   private shiftCur = 0;
   private tipV = new THREE.Vector3();       // scratch — the hot loop allocates nothing
+  // the quality governor: measured frame times (RAW, unclamped) step effects down until
+  // the frame rate holds — a stable 60 beats prettier pixels, silently (never back up:
+  // oscillating quality is worse than either level)
+  private quality = 2;                      // 2 full · 1 DPR1+lean bloom · 0 no bloom
+  private lastRaw = -1;
+  private ftAcc = 0; private ftN = 0; private ftWorst = 0;
+  private lastFps = 60; private lastWorstMs = 16;
+  private gpu = "";
+  private hud: HTMLElement | null = null;
   private fit: () => void;
 
   constructor(private root: HTMLElement, private bridge: Bridge) {
@@ -1018,6 +1027,16 @@ export class HiveWorld {
     this.renderer.setClearColor(WORLD_BG);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     root.appendChild(this.renderer.domElement);
+    // fail LOUD on the one thing no optimization can fix: a browser rendering in
+    // software (hardware acceleration off / GPU process fallen back)
+    try {
+      const gl = this.renderer.getContext();
+      const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+      this.gpu = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : "";
+    } catch { /* diagnostics only */ }
+    if (/swiftshader|software|llvmpipe/i.test(this.gpu)) {
+      setTimeout(() => this.note("this browser is rendering WITHOUT the GPU — enable hardware acceleration"), 1200);
+    }
     this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 400);
     this.scene.fog = new THREE.FogExp2(WORLD_BG, 0.013);
     // cool, dim, mostly-emissive lighting — the neon does the work; the beans carry a
@@ -1099,15 +1118,33 @@ export class HiveWorld {
       const w = root.clientWidth || 1, h = root.clientHeight || 1;
       this.renderer.setSize(w, h, false);
       this.composer.setSize(w, h);
-      // bloom at half resolution: the glow is a blur by definition — full-res bloom
-      // buys nothing visible and costs the most expensive passes on the frame
-      this.bloom.setSize(w / 2, h / 2);
+      // bloom at fractional resolution: the glow is a blur by definition — full-res
+      // bloom buys nothing visible and costs the most expensive passes on the frame
+      this.bloom.setSize(w / (this.quality === 2 ? 2 : 3), h / (this.quality === 2 ? 2 : 3));
       cv.style.width = "100%"; cv.style.height = "100%";
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
     };
     this.fit();
     new ResizeObserver(this.fit).observe(root);
+
+    // the perf beacon: real numbers from the real machine, every 10s, into the server's
+    // log (authoritative measurement beats guessing at lag). #perf in the URL also shows
+    // a tiny live HUD.
+    if (location.hash.includes("perf")) {
+      this.hud = document.createElement("div");
+      this.hud.id = "perf-hud";
+      document.body.appendChild(this.hud);
+    }
+    setInterval(() => {
+      if (!this.running) return;
+      const body = JSON.stringify({
+        fps: Math.round(this.lastFps), worstMs: Math.round(this.lastWorstMs),
+        q: this.quality, pads: this.pads.size, gpu: this.gpu.slice(0, 80),
+      });
+      fetch("/perf", { method: "POST", headers: { "content-type": "application/json" }, body })
+        .catch(() => { /* server briefly away — the next beacon tells the story */ });
+    }, 10_000);
 
     // render only while there's a viewer: page visible AND the board on screen.
     // Paused = zero GPU work.
@@ -1675,15 +1712,44 @@ export class HiveWorld {
     if (want && !this.running) {
       this.running = true;
       this.lastFrame = -1;                   // frame() takes its dt from the rAF clock only
+      this.lastRaw = -1;                     // …and the governor never counts a pause as a stall
       requestAnimationFrame(this.frame);
     } else if (!want) {
       this.running = false;                  // the in-flight rAF sees this and stops
     }
   }
 
+  // step effects down; never back up (oscillation reads worse than either level)
+  private setQuality(q: number) {
+    this.quality = q;
+    if (q <= 1) this.renderer.setPixelRatio(1);
+    if (q === 1) this.bloom.strength = 0.55;
+    if (q === 0) this.bloom.enabled = false;
+    this.fit();
+    console.info(`[hive] quality → ${q} (holding the frame rate)`);
+  }
+
   private frame = (now: number) => {
     if (!this.running) return;
     const dt = frameDt(now, this.lastFrame);
+    // the governor reads RAW deltas (frameDt clamps at 50ms — real stalls are bigger)
+    if (this.lastRaw >= 0) {
+      const raw = (now - this.lastRaw) / 1000;
+      if (raw > 0 && raw < 2) {
+        this.ftAcc += raw; this.ftN++;
+        if (raw > this.ftWorst) this.ftWorst = raw;
+        if (this.ftN >= 90) {
+          this.lastFps = this.ftN / this.ftAcc;
+          this.lastWorstMs = this.ftWorst * 1000;
+          if (this.lastFps < 45 && this.quality > 0) this.setQuality(this.quality - 1);
+          if (this.hud) {
+            this.hud.textContent = `${Math.round(this.lastFps)} fps · worst ${Math.round(this.lastWorstMs)}ms · q${this.quality} · ${this.pads.size} pads`;
+          }
+          this.ftAcc = 0; this.ftN = 0; this.ftWorst = 0;
+        }
+      }
+    }
+    this.lastRaw = now;
     this.lastFrame = now;
     this.clock += dt;
     this.idleT += dt;
