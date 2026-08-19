@@ -409,6 +409,23 @@ button { font-family: inherit; }
 .m-turn.odd { color: #b08387; }
 .m-turn.odd::before, .m-turn.odd::after { background: rgba(229, 72, 77, 0.2); }
 
+/* the CLI's caption for a tool run — docks under its activity group */
+.m-sum { font: italic 11px var(--font); color: #79828d; padding: 3px 9px 4px; }
+
+/* the slash-command menu: filtered from the SESSION'S live command list */
+.cd-menu { position: absolute; bottom: 62px; left: 12px; right: 12px; z-index: 3;
+  max-height: 300px; overflow-y: auto;
+  background: #12161d; border: 1px solid var(--hairline); border-radius: 10px;
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.45); padding: 4px; }
+.cm-row { display: flex; align-items: baseline; gap: 8px; padding: 6px 9px;
+  border-radius: 6px; cursor: pointer; min-width: 0; }
+.cm-row:hover { background: rgba(255, 255, 255, 0.05); }
+.cm-row.sel { background: rgba(156, 210, 255, 0.12); }
+.cm-name { font: 600 12px var(--mono); color: var(--accent); white-space: nowrap; }
+.cm-hint { font: 11px var(--mono); color: #5a6472; white-space: nowrap; }
+.cm-desc { font: 11px var(--font); color: var(--dim); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+
 /* notes (system-ish lines: compaction, unknown states, errors) */
 .m-note { align-self: center; font-size: 11px; color: var(--dim); text-align: center;
   padding: 2px 10px; }

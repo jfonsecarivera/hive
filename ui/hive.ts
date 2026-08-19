@@ -1241,13 +1241,15 @@ export class HiveWorld {
     return alias + "-" + n;
   }
 
-  spawnAt(slot: number, model: string, effort: string) {
+  spawnAt(slot: number, model: string, effort: string, label?: string) {
     // the dropped bean claims the cell (the same reservation a recruit click makes), the
-    // spark acknowledges, and the server's create does the real work
+    // spark acknowledges, and the server's create does the real work. The NAME seeds from
+    // the human label ("Fable 5" → fable-1), never the raw model id.
     this.reservedSlot = slot;
     const p = axialToXZ(spiralSlot(slot), HEX_SIZE);
     this.particles.burst(new THREE.Vector3(p.x, 0.6, p.z), [ACCENT, 0xd6ecff], 16, 1.8);
-    this.bridge.op({ op: "create", name: this.autoName(model), model, effort });
+    const slug = (label || model).toLowerCase().split(/\s+/)[0].replace(/[^a-z0-9-]/g, "") || "bee";
+    this.bridge.op({ op: "create", name: this.autoName(slug), model, effort });
   }
 
   // In-place board rename: the city-banner pattern — click the nameplate and it becomes an
@@ -1739,14 +1741,20 @@ function saveSeen(key: string, m: SeenDone) {
 // default every new session seeds from. Choices come from the server — never hardcoded. ──
 export class Tray {
   private defaults: { model?: string; effort?: string } = {};
-  private built = false;
+  private roster = "";                       // the built list's identity — rebuild on change
 
   constructor(private world: HiveWorld, private bridge: Bridge) {}
 
   setChoices(models: ModelChoice[], efforts: string[], defaults: Defaults) {
     this.defaults.model = defaults.model;
     this.defaults.effort = defaults.effort;
-    if (!this.built && models.length) this.build(models, efforts);
+    // the roster is DYNAMIC (a live session reports the real list): rebuild when it moves
+    const key = JSON.stringify(models);
+    if (models.length && key !== this.roster) {
+      this.roster = key;
+      document.getElementById("hive-tray")?.remove();
+      this.build(models, efforts);
+    }
     this.mark();
   }
 
@@ -1757,7 +1765,6 @@ export class Tray {
   }
 
   private build(models: ModelChoice[], efforts: string[]) {
-    this.built = true;
     const tray = document.createElement("div");
     tray.id = "hive-tray";
     const effKey = "hive:trayEfforts";
@@ -1805,7 +1812,7 @@ export class Tray {
           if (chip) {
             chip.remove();
             const slot = this.world.trayHover(ev.clientX, ev.clientY);
-            if (slot !== null) this.world.spawnAt(slot, mc.value, effort);
+            if (slot !== null) this.world.spawnAt(slot, mc.value, effort, mc.label);
             this.world.trayDragEnd();
           } else {
             // clean click: this bean (model + its effort) becomes the seed for new

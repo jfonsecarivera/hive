@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { AgentSession } from "./session";
 import { Store, type SessionRow } from "./store";
-import { EFFORTS, MODELS, type ChatEvent, type ClientOp, type Defaults, type ServerMsg, type SessionSnap } from "./proto";
+import { EFFORTS, MODELS, type ChatEvent, type ClientOp, type Defaults, type ModelChoice, type ServerMsg, type SessionSnap } from "./proto";
 
 // romp's identity palette — the same swatches the user's sessions already wear
 const PALETTE = ["#1EA1EB", "#54B204", "#4EA8A9", "#DD42FF", "#E87221",
@@ -20,6 +20,9 @@ export class Hub {
   sessions = new Map<string, AgentSession>();
   publish: (topic: string, data: string) => void = () => {};
   private hiveTimer: Timer | null = null;
+  // the model roster: the static fallback until any live session reports the real list
+  // (supportedModels) — then every tray everywhere gets the truth
+  private models: ModelChoice[] = MODELS;
 
   constructor() {
     for (const row of this.store.liveSessions()) {
@@ -46,6 +49,21 @@ export class Hub {
       this.persist(sid);
       this.scheduleHive();
     };
+    s.onCaps = (sid) => {
+      this.publish(`chat:${sid}`, this.capsMsg(sid));
+    };
+    s.onModels = (models) => {
+      if (!models.length || JSON.stringify(models) === JSON.stringify(this.models)) return;
+      this.models = models;
+      this.publish("hive", this.defaultsMsg());
+    };
+  }
+
+  modelChoices(): ModelChoice[] { return this.models; }
+
+  capsMsg(sid: string): string {
+    const s = this.sessions.get(sid);
+    return JSON.stringify({ type: "caps", sid, commands: s ? s.commands : [] } satisfies ServerMsg);
   }
 
   private persist(sid: string) {
@@ -75,7 +93,7 @@ export class Hub {
   defaultsMsg(): string {
     return JSON.stringify({
       type: "defaults", defaults: this.store.getDefaults(),
-      models: MODELS, efforts: [...EFFORTS],
+      models: this.models, efforts: [...EFFORTS],
     } satisfies ServerMsg);
   }
 

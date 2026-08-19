@@ -38,6 +38,9 @@ net.on((m: ServerMsg) => {
     case "chat":
       dock.apply(m.sid, m.events, m.reset);
       break;
+    case "caps":
+      dock.setCaps(m.sid, m.commands);
+      break;
     case "defaults":
       tray.setChoices(m.models, m.efforts, m.defaults);
       break;

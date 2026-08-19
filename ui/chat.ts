@@ -8,9 +8,10 @@
 // a running tool patches its node in place. Nothing is ever rebuilt wholesale, so there
 // is no scroll jank and no mid-click DOM churn.
 import { delegate } from "./actions";
+import { acceptCommand, commandPrefix, filterCommands } from "./commands";
 import { isKnownState, stateLine, type HiveSession } from "./hive-model";
 import { renderMarkdown } from "./markdown";
-import type { AskQuestion, ChatEvent, ClientOp } from "../server/proto";
+import type { ChatEvent, ClientOp, CmdInfo } from "../server/proto";
 
 export const DOCK_W = 460;
 
@@ -32,6 +33,11 @@ export class ChatDock {
   private sess: HiveSession | null = null;
   private renaming = false;
   private askPicks = new Map<string, Map<number, { picks: Set<number>; custom: string }>>();
+  // dynamic slash commands (the session's own list) + the autocomplete menu state
+  private commands: CmdInfo[] = [];
+  private menuEl: HTMLElement;
+  private menuItems: CmdInfo[] = [];
+  private menuIdx = 0;
 
   constructor(private op: (o: ClientOp) => void) {
     const el = document.createElement("aside");
@@ -47,6 +53,7 @@ export class ChatDock {
       '<div class="cd-goal" hidden></div>' +
       '<div class="cd-feed"></div>' +
       '<button class="cd-jump" data-act="jump" hidden>↓ latest</button>' +
+      '<div class="cd-menu" hidden></div>' +
       '<footer class="cd-compose">' +
       '<textarea class="cd-input" rows="1" placeholder="Say something…"></textarea>' +
       '<button class="cd-send" data-act="send" title="Send (Enter)">Send</button>' +
@@ -64,6 +71,15 @@ export class ChatDock {
     this.input = el.querySelector(".cd-input") as HTMLTextAreaElement;
     this.sendBtn = el.querySelector(".cd-send") as HTMLButtonElement;
     this.jump = el.querySelector(".cd-jump") as HTMLButtonElement;
+    this.menuEl = el.querySelector(".cd-menu") as HTMLElement;
+    // pointerdown, not click: the menu closes on input blur, which fires between a
+    // click's down and up and would swallow the pick
+    this.menuEl.addEventListener("pointerdown", (e) => {
+      const row = (e.target as HTMLElement).closest<HTMLElement>("[data-cmd]");
+      if (!row) return;
+      e.preventDefault();
+      this.acceptMenu(Number(row.dataset.cmd));
+    });
 
     delegate(el, {
       close: () => this.close(),
@@ -91,10 +107,18 @@ export class ChatDock {
 
     this.input.addEventListener("keydown", (e) => {
       e.stopPropagation();                   // typing never orbits the camera
+      if (!this.menuEl.hidden) {
+        // the menu owns navigation keys while it's up; everything else keeps typing
+        if (e.key === "ArrowDown") { e.preventDefault(); this.moveMenu(1); return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); this.moveMenu(-1); return; }
+        if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); this.acceptMenu(this.menuIdx); return; }
+        if (e.key === "Escape") { e.preventDefault(); this.hideMenu(); return; }
+      }
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.send(); }
       if (e.key === "Escape") { e.preventDefault(); this.close(); }
     });
-    this.input.addEventListener("input", () => this.autosize());
+    this.input.addEventListener("input", () => { this.autosize(); this.refreshMenu(); });
+    this.input.addEventListener("blur", () => setTimeout(() => this.hideMenu(), 120));
     this.feed.addEventListener("scroll", () => {
       const nearEnd = this.feed.scrollHeight - this.feed.scrollTop - this.feed.clientHeight < 90;
       this.pinned = nearEnd;
@@ -117,6 +141,8 @@ export class ChatDock {
       this.order = [];
       this.feed.replaceChildren();
       this.askPicks.clear();
+      this.commands = [];
+      this.hideMenu();
       this.op({ op: "watch", sid });
       this.pinned = true;
     }
@@ -159,6 +185,50 @@ export class ChatDock {
     this.input.placeholder = busy ? "Steer — lands in the running turn…" : "Say something…";
   }
 
+  // the session's dynamic slash commands landed (watch reply, or a commands_changed push)
+  setCaps(sid: string, commands: CmdInfo[]) {
+    if (sid !== this.sid) return;
+    this.commands = commands;
+    this.refreshMenu();
+  }
+
+  // ── the slash menu: filtered from the SESSION'S OWN command list ───────────────
+  private refreshMenu() {
+    const prefix = commandPrefix(this.input.value);
+    if (prefix === null || !this.commands.length) { this.hideMenu(); return; }
+    this.menuItems = filterCommands(this.commands, prefix);
+    if (!this.menuItems.length) { this.hideMenu(); return; }
+    this.menuIdx = Math.min(this.menuIdx, this.menuItems.length - 1);
+    this.menuEl.innerHTML = this.menuItems.map((c, i) =>
+      `<div class="cm-row${i === this.menuIdx ? " sel" : ""}" data-cmd="${i}">` +
+      `<span class="cm-name">${escText(c.name.startsWith("/") ? c.name : "/" + c.name)}</span>` +
+      (c.argumentHint ? `<span class="cm-hint">${escText(c.argumentHint)}</span>` : "") +
+      (c.description ? `<span class="cm-desc">${escText(c.description)}</span>` : "") +
+      "</div>").join("");
+    this.menuEl.hidden = false;
+  }
+
+  private moveMenu(d: number) {
+    this.menuIdx = (this.menuIdx + d + this.menuItems.length) % this.menuItems.length;
+    this.menuEl.querySelectorAll(".cm-row").forEach((r, i) => r.classList.toggle("sel", i === this.menuIdx));
+    this.menuEl.querySelector(".cm-row.sel")?.scrollIntoView({ block: "nearest" });
+  }
+
+  private acceptMenu(i: number) {
+    const c = this.menuItems[i];
+    if (!c) return;
+    this.input.value = acceptCommand(c);
+    this.hideMenu();
+    this.input.focus();
+    this.autosize();
+  }
+
+  private hideMenu() {
+    this.menuEl.hidden = true;
+    this.menuItems = [];
+    this.menuIdx = 0;
+  }
+
   // ── events in (reset = full history replay) ────────────────────────────────────
   apply(sid: string, events: ChatEvent[], reset?: boolean) {
     if (sid !== this.sid) return;
@@ -194,6 +264,14 @@ export class ChatDock {
       group.appendChild(el);
       this.feed.appendChild(group);
       return;
+    }
+    // the CLI's tool-run caption docks onto the activity block it describes
+    if (ev.k === "sum") {
+      const last = this.feed.lastElementChild;
+      if (last && last.classList.contains("m-act")) {
+        last.appendChild(el);
+        return;
+      }
     }
     this.feed.appendChild(el);
   }
@@ -241,6 +319,10 @@ export class ChatDock {
         if (ev.note) d.classList.add("odd");
         break;
       }
+      case "sum":
+        d.className = "m-sum";
+        d.textContent = ev.text;
+        break;
       case "note":
         d.className = "m-note";
         d.dataset.tone = ev.tone;
@@ -408,6 +490,7 @@ export class ChatDock {
     if (!text || !this.sid) return;
     this.op({ op: "send", sid: this.sid, text });
     this.input.value = "";
+    this.hideMenu();
     this.autosize();
     this.pinned = true;
     this.scrollToEnd(false);

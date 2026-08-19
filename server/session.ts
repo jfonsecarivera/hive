@@ -2,8 +2,8 @@
 // (a) the board's state vocabulary and (b) upsertable chat events. State moves on
 // events only — session_state_changed, status, api_retry, result, a pending ask —
 // never on timers (the romp design rule this app inherits).
-import { query, type Options, type PermissionResult, type PermissionUpdate, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { AskQuestion, ChatEvent, HiveState, SessionSnap, WireState } from "./proto";
+import { query, type ModelInfo, type Options, type PermissionResult, type PermissionUpdate, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { AskQuestion, ChatEvent, CmdInfo, ModelChoice, SessionSnap, WireState } from "./proto";
 
 const FADE_AFTER_S = 3600;
 const INPUT_CAP = 2000;
@@ -12,10 +12,12 @@ const TOPS_CAP = 50;
 
 // ── SDK vocabulary tripwires ─────────────────────────────────────────────────────
 // These Records are keyed by the SDK's OWN unions, exhaustively: when an SDK upgrade
-// adds a session state or a status value, `bun x tsc` fails right here — the signal
-// that Claude Code now has a state that is not in ours. At runtime the lookups stay
-// stringly (the live CLI can be newer than the installed types); an unmapped value
-// passes through as a visible "unknown state" instead of being coerced.
+// adds a message kind, a session state, or a status value, `bun x tsc` fails right
+// here — the signal that Claude Code now says something this app doesn't know. At
+// runtime the lookups stay stringly (the live CLI can be newer than the installed
+// types); an unmapped value passes through visibly instead of being coerced:
+// unknown STATES ride to the board verbatim, unknown MESSAGE KINDS surface once as
+// a chat note (foreignKind) and are otherwise skipped.
 type WireSessionState = Extract<SDKMessage, { type: "system"; subtype: "session_state_changed" }>["state"];
 const SESSION_STATE_MAP: Record<WireSessionState, "run" | "idle" | "action"> = {
   running: "run",
@@ -26,6 +28,58 @@ type WireStatus = NonNullable<Extract<SDKMessage, { type: "system"; subtype: "st
 const STATUS_MAP: Record<WireStatus, "compacting" | "requesting"> = {
   compacting: "compacting",
   requesting: "requesting",
+};
+
+// Every top-level message kind the installed SDK can emit. "handle" names have a case
+// in onMsg; "ignore" is a DELIBERATE no-op (each with its reason). A kind in neither —
+// a live CLI newer than the types — lands in foreignKind.
+type WireTop = SDKMessage["type"];
+const TOP_HANDLING: Record<WireTop, "handle" | "ignore"> = {
+  system: "handle",
+  assistant: "handle",
+  user: "handle",
+  result: "handle",
+  stream_event: "handle",
+  tool_progress: "handle",
+  tool_use_summary: "handle",       // the CLI's own caption for a tool run → chat
+  auth_status: "handle",            // credential trouble must never be silent
+  conversation_reset: "handle",     // /clear completed
+  rate_limit_event: "handle",       // approaching/hitting plan limits
+  prompt_suggestion: "ignore",      // composer autofill hints — no surface for them here
+};
+
+// …and every system subtype. Same contract.
+type WireSub = Extract<SDKMessage, { type: "system" }>["subtype"];
+const SUB_HANDLING: Record<WireSub, "handle" | "ignore"> = {
+  init: "handle",
+  status: "handle",
+  api_retry: "handle",
+  session_state_changed: "handle",
+  compact_boundary: "handle",
+  background_tasks_changed: "handle",   // drives awaitingBg — the bean leaning back
+  commands_changed: "handle",           // dynamic slash-command list
+  notification: "handle",
+  informational: "handle",
+  local_command_output: "handle",
+  model_refusal_fallback: "handle",
+  model_refusal_no_fallback: "handle",
+  permission_denied: "handle",
+  task_notification: "handle",
+  worker_shutting_down: "handle",
+  mirror_error: "handle",
+  // deliberately ignored, each for a reason:
+  hook_started: "ignore",               // hook lifecycle — only emitted when opted into
+  hook_progress: "ignore",
+  hook_response: "ignore",
+  files_persisted: "ignore",            // checkpointing bookkeeping
+  memory_recall: "ignore",              // internal recall notices
+  thinking_tokens: "ignore",            // token telemetry; cost rides the result
+  plugin_install: "ignore",             // install progress spam
+  elicitation_complete: "ignore",       // MCP elicitation — we don't run onElicitation
+  control_request_progress: "ignore",   // control-channel plumbing
+  task_started: "ignore",               // the changed-set (background_tasks_changed)
+  task_updated: "ignore",               //   is the authoritative view of live tasks;
+  task_progress: "ignore",              //   task_notification carries the outcome
 };
 
 export interface SessionInit {
@@ -79,6 +133,9 @@ export class AgentSession {
   private compacting = false;
   private foreignState: string | null = null;   // a wire state we don't recognize, verbatim
   private foreignSeen = new Set<string>();
+  private clearing = false;                     // a /clear in flight (send → conversation_reset)
+  private bgTasks = 0;                          // live background tasks (replace semantics)
+  commands: CmdInfo[] = [];                     // the session's dynamic slash commands
   private turnStart = 0;
   private turnTools = 0;
   private curTurnId: string | null = null;
@@ -101,6 +158,8 @@ export class AgentSession {
 
   onEvent: (sid: string, ev: ChatEvent) => void = () => {};
   onChange: (sid: string) => void = () => {};
+  onCaps: (sid: string) => void = () => {};                 // commands list changed
+  onModels: (models: ModelChoice[]) => void = () => {};     // the live model roster
 
   constructor(init: SessionInit) {
     this.sid = init.sid;
@@ -130,7 +189,8 @@ export class AgentSession {
       goal: this.goal, brief: this.brief,
       narration: this.inflight && this.turnStart ? { since: this.turnStart, toolUses: this.turnTools } : null,
       needsYou: this.asks.size > 0, needsYouT: this.newestAskT(), liveAsk: this.asks.size > 0,
-      doneT: this.doneT, topIds: [...this.topIds].sort(), doneTopIds: [...this.doneTopIds].sort(),
+      doneT: this.doneT, bgTasks: this.bgTasks,
+      topIds: [...this.topIds].sort(), doneTopIds: [...this.doneTopIds].sort(),
       model: this.model, effort: this.effort, permMode: this.permMode, cwd: this.cwd,
       cost: this.costBase + this.costLive,
     };
@@ -159,10 +219,12 @@ export class AgentSession {
       const first = [...this.asks.values()][0];
       return this.setState("awaiting", first.ev.title);
     }
+    if (this.clearing) return this.setState("clearing");
     if (this.compacting) return this.setState("compacting");
     if (this.retrying) return this.setState("retrying", this.brief);
     if (this.foreignState) return this.setState(this.foreignState, this.brief);
     if (this.inflight) return this.setState("working");
+    if (this.bgTasks > 0) return this.setState("awaitingBg");
     if (this.state !== "blocked") this.setState("ready", this.brief);
   }
 
@@ -174,6 +236,15 @@ export class AgentSession {
       this.note(`the session reported a state this app doesn't know yet: "${raw}"`);
     }
     this.settle();
+  }
+
+  // a MESSAGE KIND beyond our vocabulary (live CLI newer than the installed SDK types):
+  // say so once per kind, then skip its instances — never guess at unknown semantics
+  private foreignKind(kind: string) {
+    const key = "kind:" + kind;
+    if (this.foreignSeen.has(key)) return;
+    this.foreignSeen.add(key);
+    this.note(`the session sent a ${kind} message this app doesn't know yet — shown nowhere else`);
   }
 
   private emit(ev: ChatEvent) { this.onEvent(this.sid, ev); }
@@ -212,6 +283,18 @@ export class AgentSession {
     if (this.claudeSessionId) opts.resume = this.claudeSessionId;
     this.q = query({ prompt: this.inputs(), options: opts });
     this.drain(this.q);
+    // dynamic capabilities, from the session itself (never a hardcoded copy): the live
+    // slash-command list (richer than init's bare names) and the model roster
+    const q = this.q;
+    q.supportedCommands().then((cmds) => {
+      if (this.q !== q) return;
+      this.commands = cmds.map((c) => ({ name: c.name, description: c.description, argumentHint: c.argumentHint }));
+      this.onCaps(this.sid);
+    }).catch(() => { /* a client that dies before init answers via teardown */ });
+    q.supportedModels().then((ms: ModelInfo[]) => {
+      if (this.q !== q) return;
+      this.onModels(ms.map((m) => ({ value: m.value, label: m.displayName })));
+    }).catch(() => { /* same */ });
   }
 
   private async drain(q: Query) {
@@ -242,7 +325,9 @@ export class AgentSession {
     this.interrupting = false;
     this.retrying = false;
     this.compacting = false;
+    this.clearing = false;
     this.foreignState = null;
+    this.bgTasks = 0;                 // the tasks died with their client
     if (this.ended) return;
     if (wasWorking) {
       this.note(`stopped: ${why}`, "err");
@@ -284,6 +369,37 @@ export class AgentSession {
         } else if (m.subtype === "compact_boundary") {
           this.compacting = false;
           this.settle();
+        } else if (m.subtype === "background_tasks_changed") {
+          this.bgTasks = Array.isArray(m.tasks) ? m.tasks.length : 0;   // replace semantics
+          this.settle();
+          this.onChange(this.sid);
+        } else if (m.subtype === "commands_changed") {
+          this.commands = (m.commands || []).map((c) => ({
+            name: c.name, description: c.description, argumentHint: c.argumentHint,
+          }));
+          this.onCaps(this.sid);
+        } else if (m.subtype === "notification") {
+          this.note(m.text);
+        } else if (m.subtype === "informational") {
+          // 'info' is transcript-mode noise by the SDK's own docs; the rest surface
+          if (m.level !== "info") this.note(m.content, m.level === "warning" ? "err" : "info");
+        } else if (m.subtype === "local_command_output") {
+          if (m.content?.trim()) this.note(m.content);
+        } else if (m.subtype === "model_refusal_fallback" || m.subtype === "model_refusal_no_fallback") {
+          this.note(m.content || "the model refused this request", "err");
+        } else if (m.subtype === "permission_denied") {
+          this.note(`${m.tool_name} was denied${m.decision_reason ? ` — ${m.decision_reason}` : ""}`, "err");
+        } else if (m.subtype === "task_notification") {
+          if (!m.skip_transcript) {
+            this.note(`background task ${m.status}: ${m.summary}`, m.status === "failed" ? "err" : "info");
+          }
+        } else if (m.subtype === "worker_shutting_down") {
+          this.note(`the session's worker is shutting down (${m.reason})`, "err");
+        } else if (m.subtype === "mirror_error") {
+          this.note(`transcript mirror error: ${m.error}`, "err");
+        } else {
+          const h = (SUB_HANDLING as Record<string, string | undefined>)[(m as any).subtype];
+          if (h === undefined) this.foreignKind(`system/${(m as any).subtype}`);
         }
         break;
       case "stream_event": {
@@ -364,6 +480,7 @@ export class AgentSession {
         this.flushAllBlocks(true);
         this.inflight = false;
         this.retrying = false;
+        this.clearing = false;
         this.foreignState = null;
         const wasInterrupting = this.interrupting;
         this.interrupting = false;
@@ -394,8 +511,37 @@ export class AgentSession {
         this.onChange(this.sid);
         break;
       }
-      default:
+      case "tool_use_summary":
+        // the CLI's own one-line caption for the tool run it just finished — the group label
+        this.emit({ k: "sum", id: m.uuid || `s${++this.evn}`, t: now(), text: m.summary });
         break;
+      case "auth_status":
+        if (m.error) {
+          this.note(`authentication: ${m.error}`, "err");
+          this.setState("blocked", `authentication: ${m.error}`.slice(0, 200));
+        } else if (m.isAuthenticating) {
+          this.note("authenticating…");
+        }
+        break;
+      case "conversation_reset":
+        this.clearing = false;
+        this.note("context cleared");
+        this.settle();
+        break;
+      case "rate_limit_event": {
+        const i = m.rate_limit_info;
+        if (i && i.status !== "allowed") {
+          const when = i.resetsAt ? ` — resets ${new Date(i.resetsAt * 1000).toLocaleTimeString()}` : "";
+          this.note(i.status === "rejected" ? `rate limit hit${when}` : `nearing the rate limit${when}`,
+            i.status === "rejected" ? "err" : "info");
+        }
+        break;
+      }
+      default: {
+        const h = (TOP_HANDLING as Record<string, string | undefined>)[(m as any).type];
+        if (h === undefined) this.foreignKind(`"${(m as any).type}"`);
+        break;
+      }
     }
   }
 
@@ -509,6 +655,11 @@ export class AgentSession {
     this.emit({ k: "user", id: `u${++this.evn}-${t.toString(36)}`, t, text });
     const firstLine = text.trim().split("\n")[0].slice(0, 96);
     if (!firstLine.startsWith("/")) this.goal = firstLine;
+    // context ops get their state the moment the user asks (instant feedback); the
+    // deciding events (status/compact_boundary, conversation_reset, result) retire them
+    const cmd = firstLine.split(/\s/)[0];
+    if (cmd === "/clear") this.clearing = true;
+    if (cmd === "/compact") this.compacting = true;
     if (!this.inflight) {
       this.curTurnId = `t${t.toString(36)}-${this.evn}`;
       this.topIds.push(this.curTurnId);

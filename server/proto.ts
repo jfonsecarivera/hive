@@ -1,5 +1,6 @@
 // Wire protocol shared by the server and the UI. One WebSocket carries everything:
 // the board snapshot fans out on the "hive" topic, each chat on "chat:<sid>".
+import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 
 // The board's state vocabulary. The wire stays OPEN on purpose: a state the CLI
 // invents after this ships passes through as its raw string, and the UI renders it
@@ -27,6 +28,7 @@ export interface SessionSnap {
   needsYouT: number;
   liveAsk: boolean;
   doneT: number;
+  bgTasks: number;                // live background tasks (SDK replace-semantics set)
   topIds: string[];
   doneTopIds: string[];
   model: string;
@@ -58,7 +60,11 @@ export type ChatEvent =
       canAlways?: boolean; questions?: AskQuestion[];
       status: "open" | "done"; answer?: string }
   | { k: "turn"; id: string; t: number; dur: number; cost?: number; note?: string }
+  | { k: "sum"; id: string; t: number; text: string }   // the CLI's caption for a tool run
   | { k: "note"; id: string; t: number; text: string; tone: "info" | "err" };
+
+// a session's live slash commands (dynamic: supportedCommands + commands_changed)
+export interface CmdInfo { name: string; description: string; argumentHint: string }
 
 export interface Defaults {
   model: string;
@@ -87,12 +93,20 @@ export type ClientOp =
 export type ServerMsg =
   | { type: "hive"; sessions: SessionSnap[] }
   | { type: "chat"; sid: string; reset?: boolean; events: ChatEvent[] }
+  | { type: "caps"; sid: string; commands: CmdInfo[] }
   | { type: "defaults"; defaults: Defaults; models: ModelChoice[]; efforts: string[] }
   | { type: "err"; sid?: string; title: string; text?: string }
   | { type: "warn"; sid?: string; text: string };
 
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+// Effort vocabulary, tripwired to the SDK's own union: when an SDK upgrade adds a
+// level, this Record stops compiling — the drift is caught at typecheck, not in prod.
+const EFFORT_SET: Record<EffortLevel, true> = {
+  low: true, medium: true, high: true, xhigh: true, max: true,
+};
+export const EFFORTS = Object.keys(EFFORT_SET) as EffortLevel[];
 
+// The static fallback shown before any live session has reported the real list —
+// hub swaps in `supportedModels()` from the first session that connects.
 export const MODELS: ModelChoice[] = [
   { value: "fable", label: "Fable" },
   { value: "opus", label: "Opus" },

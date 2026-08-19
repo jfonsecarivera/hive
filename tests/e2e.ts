@@ -15,7 +15,7 @@ const srv = Bun.spawn([process.execPath, "run", join(import.meta.dir, "../server
 });
 await Bun.sleep(1500);
 
-const seen = { states: new Set<string>(), kinds: new Set<string>(), text: "" };
+const seen = { states: new Set<string>(), kinds: new Set<string>(), text: "", cmds: 0, models: 0 };
 let sid = "";
 const ws = new WebSocket("ws://127.0.0.1:4519/ws");
 const done = new Promise<void>((resolve) => {
@@ -38,6 +38,8 @@ const done = new Promise<void>((resolve) => {
         if (ev.k === "turn") resolve();
       }
     }
+    if (m.type === "caps") seen.cmds = Math.max(seen.cmds, m.commands.length);
+    if (m.type === "defaults") seen.models = Math.max(seen.models, m.models.length);
   };
   ws.onopen = () => {
     ws.send(JSON.stringify({ op: "create", model: "haiku", effort: "low", cwd: "/tmp" }));
@@ -60,6 +62,7 @@ const js = await fetch("http://127.0.0.1:4519/dist/boot.js").then((r) => r.statu
 
 console.log("states seen:", [...seen.states].join(", "));
 console.log("event kinds:", [...seen.kinds].join(", "));
+console.log("dyn caps:   ", seen.cmds, "commands;", seen.models, "models in roster");
 console.log("final text: ", JSON.stringify(seen.text).slice(0, 80));
 console.log("healthz:    ", JSON.stringify(health));
 console.log("models:     ", models.models.map((m: any) => m.value).join(","));
@@ -67,7 +70,7 @@ console.log("index ok:   ", page.includes("hive-root"), " boot.js:", js);
 
 const ok = seen.states.has("working") && seen.kinds.has("user") && seen.kinds.has("text")
   && seen.kinds.has("turn") && seen.text.toLowerCase().includes("honeycomb")
-  && health.sessions === 0 && js === 200;
+  && seen.cmds > 3 && health.sessions === 0 && js === 200;
 console.log(ok ? "E2E OK" : "E2E FAILED");
 srv.kill();
 process.exit(ok ? 0 : 1);

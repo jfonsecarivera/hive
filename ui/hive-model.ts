@@ -44,7 +44,10 @@ export function stateLine(s: HiveSession, now: number): string {
         : `needs you — asked ${hiveAge(now - s.needsYouT)} ago`;
     case "blocked": return s.brief ? `stopped — ${s.brief}` : "stopped on an error";
     case "retrying": return s.brief || "hitting API errors, retrying";
-    case "awaitingBg": return "idle, waiting on background work";
+    case "awaitingBg":
+      return s.bgTasks > 0
+        ? `idle — ${s.bgTasks} background task${s.bgTasks === 1 ? "" : "s"} running`
+        : "idle, waiting on background work";
     case "compacting": return "compacting its context";
     case "clearing": return "clearing its context";
     case "interrupting": return "stopping…";

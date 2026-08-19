@@ -4,7 +4,7 @@
 import { join } from "node:path";
 import { buildUi, ROOT } from "./build";
 import { Hub } from "./hub";
-import { EFFORTS, MODELS, type ClientOp, type ServerMsg } from "./proto";
+import { EFFORTS, type ClientOp, type ServerMsg } from "./proto";
 
 const PORT = Number(process.env.HIVE_PORT || 4483);
 
@@ -35,7 +35,7 @@ const server = Bun.serve<WsData>({
     }
     if (url.pathname === "/models") {
       const d = hub.store.getDefaults();
-      return Response.json({ models: MODELS, efforts: EFFORTS.map((e) => ({ value: e })), defaults: { model: d.model, effort: d.effort } });
+      return Response.json({ models: hub.modelChoices(), efforts: EFFORTS.map((e) => ({ value: e })), defaults: { model: d.model, effort: d.effort } });
     }
     if (url.pathname === "/healthz") return Response.json({ ok: true, sessions: hub.sessions.size });
     return new Response("not found", { status: 404 });
@@ -100,6 +100,7 @@ function handle(ws: Bun.ServerWebSocket<WsData>, op: ClientOp) {
       ws.data.watching.add(op.sid);
       ws.subscribe(`chat:${op.sid}`);
       ws.send(JSON.stringify({ type: "chat", sid: op.sid, reset: true, events: hub.history(op.sid) } satisfies ServerMsg));
+      ws.send(hub.capsMsg(op.sid));
       break;
     }
     case "unwatch":
