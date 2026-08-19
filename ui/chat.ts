@@ -26,6 +26,8 @@ export class ChatDock {
   private order: string[] = [];
   private head: { dot: HTMLElement; name: HTMLElement; sub: HTMLElement; stop: HTMLButtonElement };
   private goalEl: HTMLElement;
+  private tasksEl!: HTMLElement;
+  private tasksKey = "";                     // last rendered tasks — repaint only on change
   private input: HTMLTextAreaElement;
   private sendBtn: HTMLButtonElement;
   private jump: HTMLButtonElement;
@@ -51,6 +53,7 @@ export class ChatDock {
       '<button class="cd-x" data-act="close" title="Close (Esc)" aria-label="Close">×</button>' +
       "</header>" +
       '<div class="cd-goal" hidden></div>' +
+      '<div class="cd-tasks" hidden></div>' +
       '<div class="cd-feed"></div>' +
       '<button class="cd-jump" data-act="jump" hidden>↓ latest</button>' +
       '<div class="cd-menu" hidden></div>' +
@@ -62,6 +65,7 @@ export class ChatDock {
     this.el = el;
     this.feed = el.querySelector(".cd-feed") as HTMLElement;
     this.goalEl = el.querySelector(".cd-goal") as HTMLElement;
+    this.tasksEl = el.querySelector(".cd-tasks") as HTMLElement;
     this.head = {
       dot: el.querySelector(".cd-dot") as HTMLElement,
       name: el.querySelector(".cd-name") as HTMLElement,
@@ -142,6 +146,8 @@ export class ChatDock {
       this.feed.replaceChildren();
       this.askPicks.clear();
       this.commands = [];
+      this.tasksKey = "";
+      this.tasksEl.hidden = true;
       this.hideMenu();
       this.op({ op: "watch", sid });
       this.pinned = true;
@@ -180,6 +186,22 @@ export class ChatDock {
     this.head.sub.dataset.state = isKnownState(s.state) ? s.state : "unknown";
     this.goalEl.hidden = !s.goal;
     if (s.goal) this.goalEl.textContent = s.goal;
+    // the agent's own to-do list + its live background tasks: standing state, always in
+    // view, repainted only when it actually changed (no buttons inside — churn-safe)
+    const key = JSON.stringify([s.todos, s.bg]);
+    if (key !== this.tasksKey) {
+      this.tasksKey = key;
+      let html = "";
+      for (const td of s.todos) {
+        html += `<div class="td ${td.st}"><i>${td.st === "done" ? "✓" : td.st === "active" ? "▸" : "○"}</i>` +
+          `<span>${escText(td.text)}</span></div>`;
+      }
+      for (const b of s.bg) {
+        html += `<div class="bgt"><i>⬡</i><span>${escText(b.desc || b.type)}</span></div>`;
+      }
+      this.tasksEl.hidden = !html;
+      this.tasksEl.innerHTML = html;
+    }
     const busy = s.state === "working" || s.state === "compacting" || s.state === "retrying";
     this.head.stop.classList.toggle("show", busy);
     this.input.placeholder = busy ? "Steer — lands in the running turn…" : "Say something…";

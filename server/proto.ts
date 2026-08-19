@@ -15,12 +15,15 @@ export const KNOWN_STATES = [
 export type HiveState = (typeof KNOWN_STATES)[number];
 export type WireState = HiveState | (string & {});
 
+export interface TodoItem { text: string; st: "pending" | "active" | "done" }
+export interface BgTask { id: string; type: string; desc: string }
+
 export interface SessionSnap {
   sid: string;
   name: string;
   color: { bg: string; fg: string };
   state: WireState;
-  faded: boolean;
+  lastT: number;                  // last activity — "faded" derives from this at RENDER time
   goal: string | null;
   brief: string | null;
   narration: { since: number; toolUses: number } | null;
@@ -28,7 +31,8 @@ export interface SessionSnap {
   needsYouT: number;
   liveAsk: boolean;
   doneT: number;
-  bgTasks: number;                // live background tasks (SDK replace-semantics set)
+  todos: TodoItem[];              // the agent's own to-do list (TodoWrite), latest write wins
+  bg: BgTask[];                   // live background tasks (SDK replace-semantics set)
   topIds: string[];
   doneTopIds: string[];
   model: string;

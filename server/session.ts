@@ -3,9 +3,8 @@
 // events only — session_state_changed, status, api_retry, result, a pending ask —
 // never on timers (the romp design rule this app inherits).
 import { query, type ModelInfo, type Options, type PermissionResult, type PermissionUpdate, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { AskQuestion, ChatEvent, CmdInfo, ModelChoice, SessionSnap, WireState } from "./proto";
+import type { AskQuestion, BgTask, ChatEvent, CmdInfo, ModelChoice, SessionSnap, TodoItem, WireState } from "./proto";
 
-const FADE_AFTER_S = 3600;
 const INPUT_CAP = 2000;
 const OUTPUT_CAP = 4000;
 const TOPS_CAP = 50;
@@ -134,7 +133,8 @@ export class AgentSession {
   private foreignState: string | null = null;   // a wire state we don't recognize, verbatim
   private foreignSeen = new Set<string>();
   private clearing = false;                     // a /clear in flight (send → conversation_reset)
-  private bgTasks = 0;                          // live background tasks (replace semantics)
+  private bg: BgTask[] = [];                    // live background tasks (replace semantics)
+  private todos: TodoItem[] = [];               // the agent's TodoWrite list, latest write wins
   commands: CmdInfo[] = [];                     // the session's dynamic slash commands
   private turnStart = 0;
   private turnTools = 0;
@@ -182,14 +182,13 @@ export class AgentSession {
   }
 
   snap(): SessionSnap {
-    const t = now();
     return {
       sid: this.sid, name: this.name, color: this.color,
-      state: this.state, faded: this.state === "ready" && t - this.lastT > FADE_AFTER_S,
+      state: this.state, lastT: this.lastT,
       goal: this.goal, brief: this.brief,
       narration: this.inflight && this.turnStart ? { since: this.turnStart, toolUses: this.turnTools } : null,
       needsYou: this.asks.size > 0, needsYouT: this.newestAskT(), liveAsk: this.asks.size > 0,
-      doneT: this.doneT, bgTasks: this.bgTasks,
+      doneT: this.doneT, todos: this.todos, bg: this.bg,
       topIds: [...this.topIds].sort(), doneTopIds: [...this.doneTopIds].sort(),
       model: this.model, effort: this.effort, permMode: this.permMode, cwd: this.cwd,
       cost: this.costBase + this.costLive,
@@ -224,7 +223,7 @@ export class AgentSession {
     if (this.retrying) return this.setState("retrying", this.brief);
     if (this.foreignState) return this.setState(this.foreignState, this.brief);
     if (this.inflight) return this.setState("working");
-    if (this.bgTasks > 0) return this.setState("awaitingBg");
+    if (this.bg.length > 0) return this.setState("awaitingBg");
     if (this.state !== "blocked") this.setState("ready", this.brief);
   }
 
@@ -327,7 +326,7 @@ export class AgentSession {
     this.compacting = false;
     this.clearing = false;
     this.foreignState = null;
-    this.bgTasks = 0;                 // the tasks died with their client
+    this.bg = [];                     // the tasks died with their client
     if (this.ended) return;
     if (wasWorking) {
       this.note(`stopped: ${why}`, "err");
@@ -372,7 +371,9 @@ export class AgentSession {
           this.compacting = false;
           this.settle();
         } else if (m.subtype === "background_tasks_changed") {
-          this.bgTasks = Array.isArray(m.tasks) ? m.tasks.length : 0;   // replace semantics
+          this.bg = (Array.isArray(m.tasks) ? m.tasks : []).map((x) => ({
+            id: x.task_id, type: x.task_type, desc: x.description,
+          }));
           this.settle();
           this.onChange(this.sid);
         } else if (m.subtype === "commands_changed") {
@@ -437,6 +438,11 @@ export class AgentSession {
         for (const block of msg.content || []) {
           if (block.type === "tool_use") {
             this.turnTools++;
+            // the agent's own to-do list is standing state, not just a tool row
+            if (block.name === "TodoWrite") {
+              this.todos = parseTodos(block.input);
+              this.onChange(this.sid);
+            }
             const ev: Extract<ChatEvent, { k: "tool" }> = {
               k: "tool", id: block.id, t: now(), name: block.name,
               title: toolTitle(block.name, block.input || {}),
@@ -824,6 +830,22 @@ export function toolPreview(tool: string, input: Record<string, any>): { kind: "
     return { kind: "diff", text: cap([path, ...String(input.content).split("\n").map((l: string) => "+" + l)].join("\n")) };
   }
   return undefined;
+}
+
+// TodoWrite input → the standing checklist. The agent writes the WHOLE list each call
+// (replace semantics), so the latest write is the truth.
+export function parseTodos(input: unknown): TodoItem[] {
+  const raw = (input as any)?.todos;
+  if (!Array.isArray(raw)) return [];
+  const out: TodoItem[] = [];
+  for (const t of raw.slice(0, 30)) {
+    const text = String(t?.content ?? "").trim();
+    if (!text) continue;
+    const st = t?.status === "completed" ? "done" : t?.status === "in_progress" ? "active" : "pending";
+    // the active item reads best in its activeForm ("Building the parser")
+    out.push({ text: st === "active" && t?.activeForm ? String(t.activeForm) : text, st });
+  }
+  return out;
 }
 
 function summarizeAnswers(answers: Record<string, string | string[]>): string {

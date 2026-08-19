@@ -1,7 +1,7 @@
 // Boot — wires the three pieces together on one page: the world (WebGL board), the
 // tray (drag-to-spawn), and the chat dock. No modals anywhere: sessions are created
 // by dragging a model bean onto a hexagon, and clicking any bean opens its chat.
-import { ChatDock, DOCK_W } from "./chat";
+import { ChatDock } from "./chat";
 import { HiveWorld, Tray, type Bridge } from "./hive";
 import { net } from "./net";
 import type { ServerMsg } from "../server/proto";
@@ -17,7 +17,8 @@ const bridge: Bridge = {
 const world = new HiveWorld(root, bridge);
 const tray = new Tray(world, bridge);
 const dock = new ChatDock((o) => net.op(o));
-dock.onOpenChange = (open) => world.setShift(open ? DOCK_W : 0);
+// closing the chat ends the portrait; opening happens through world.openChat itself
+dock.onOpenChange = (open) => { if (!open) world.exitPortrait(); };
 
 // the reconnect chip: honest about a dead server, quiet otherwise
 const conn = document.createElement("div");

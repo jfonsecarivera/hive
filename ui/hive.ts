@@ -12,8 +12,9 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { delegate } from "./actions";
+import { DOCK_W } from "./chat";
 import { assignSlots, axialToXZ, frameDt, frameRadius, HEX_SIZE, hexCorner, hexDistance, latticeSegments, PAD_R, PAD_THETA, RIM_THETA, ringOf, slotOfAxial, spiralSlot, xzToAxial } from "./hive-layout";
-import { diffSessions, ENDING_ACK_MS, finishedLine, foldEnding, foldSeenAsk, foldSeenDone, isKnownState, stateLine, type HiveSession, type SeenDone } from "./hive-model";
+import { diffSessions, finishedLine, foldEnding, foldSeenAsk, foldSeenDone, isFaded, isKnownState, stateLine, type HiveSession, type SeenDone } from "./hive-model";
 import type { ClientOp, Defaults, ModelChoice } from "../server/proto";
 
 // what the world needs from the page around it — the whole outside contract
@@ -94,6 +95,7 @@ class Pad {
   private carryWant = new THREE.Vector3(); // scratch — no per-frame allocation
   private homeX = 0; private homeZ = 0;    // the pad's cell — eased toward, so a re-home GLIDES
   lift = 0;                                 // hover/press target offset, eased in update()
+  portrait = false;                         // the close-up subject: face the viewer
   private liftCur = 0;
   private ringColor = new THREE.Color(ST.ready);
   private ringTarget = new THREE.Color(ST.ready);
@@ -101,6 +103,8 @@ class Pad {
   private spawnT = 0;                       // 0→1 arrival pop
   dyingT = -1;                              // ≥0 → departure animation clock
   sess: HiveSession;
+
+  private fadedCur = false;                 // dozing, derived per frame from lastT
 
   constructor(sess: HiveSession, slot: number) {
     this.sess = sess;
@@ -178,12 +182,21 @@ class Pad {
     // drag moves the carrier — so picking them up never fights the idle animation
     this.carrier.add(this.guy.group);
     this.group.add(this.carrier);
-    this.guy.setState(this.guyState(), sess.faded);
+    this.fadedCur = isFaded(sess, Math.floor(Date.now() / 1000));
+    this.guy.setState(this.guyState(), this.fadedCur);
+
+    // one flat pick list per pad, tagged for the world's single-raycast hover
+    this.padMesh.userData = { sid: sess.sid, kind: "pad" };
+    this.guy.hit.userData = { sid: sess.sid, kind: "bean" };
+    this.labelMesh.userData = { sid: sess.sid, kind: "name" };
 
     this.group.scale.setScalar(0.001);      // arrival pop plays from ~zero
     this.ringColor.setHex(stColor(sess.state));
     this.ringTarget.setHex(stColor(sess.state));
   }
+
+  dozing(): boolean { return this.fadedCur; }
+  pickTargets(): THREE.Object3D[] { return [this.guy.hit, this.labelMesh, this.padMesh]; }
 
   // the pose the bean acts out: an ACKNOWLEDGED filed ask stands calm (ready) under its red
   // ring — the wave is part of the shout, and the shout is for unseen needs-you only
@@ -195,33 +208,34 @@ class Pad {
   setAskAck(ack: boolean) {
     if (this.askAck === ack) return;
     this.askAck = ack;
-    if (this.sess.state === "awaiting") this.guy.setState(this.guyState(), this.sess.faded);
+    if (this.sess.state === "awaiting") this.guy.setState(this.guyState(), this.fadedCur);
   }
 
-  // a real state/name change arrived (diff event) — retarget; update() animates the morph
-  apply(sess: HiveSession, stateChanged: boolean) {
+  // a real state/name change arrived (diff event) — retarget; update() animates the morph.
+  // Returns true when the pick list changed (a rebuilt nameplate), so the world re-lists.
+  apply(sess: HiveSession, stateChanged: boolean): boolean {
     const prevName = this.sess.name, prevColor = this.sess.color?.bg;
     this.sess = sess;
     if (stateChanged) {
       this.ringTarget.setHex(stColor(sess.state));
-      this.guy.setState(this.guyState(), sess.faded);
+      this.guy.setState(this.guyState(), this.fadedCur);
     }
     if (sess.name !== prevName || sess.color?.bg !== prevColor) {
       this.labelYaw.remove(this.labelMesh);
       disposeDecal(this.labelMesh);
       this.labelMesh = makeNameDecal(sess.name, sess.color?.bg || "#cccccc");
       this.labelMesh.position.z = LABEL_FRONT;
+      this.labelMesh.userData = { sid: sess.sid, kind: "name" };
       this.labelYaw.add(this.labelMesh);
+      return true;
     }
+    return false;
   }
 
-  hitMeshes(): THREE.Object3D[] { return [this.padMesh]; }
-  beanMeshes(): THREE.Object3D[] { return [this.guy.hit]; }
   pokeBean() { this.guy.poke(); }
 
-  // the nameplate as a click target (board rename): only when actually readable — an
+  // the nameplate is a click target (board rename) only when actually readable — an
   // invisible plate must never be a secret button, and hover already fades it in
-  nameMeshes(): THREE.Object3D[] { return [this.labelMesh]; }
   nameVisible(): boolean {
     return this.labelMesh.visible && (this.labelMesh.material as THREE.MeshBasicMaterial).opacity > 0.5;
   }
@@ -308,7 +322,16 @@ class Pad {
     // the unknown-state note: quiet, steady — the ? is a fact, not a shout
     this.quest.visible = !isKnownState(st);
     if (this.quest.visible) this.quest.position.y = 2.05 + 0.05 * Math.sin(this.t * 1.6);
+    // dozing derives from lastT right here, per frame — the bean nods off (and wakes)
+    // the moment its own clock crosses the line, no push or timer involved
+    const faded = isFaded(this.sess, Date.now() / 1000);
+    if (faded !== this.fadedCur) {
+      this.fadedCur = faded;
+      this.guy.setState(this.guyState(), faded);
+    }
     this.guy.update(dt, this.t, camYaw);
+    // the portrait subject looks at YOU — whatever its pose, the face finds the camera
+    if (this.portrait) this.guy.group.rotation.y = camYaw;
     return false;
   }
 
@@ -937,14 +960,25 @@ export class HiveWorld {
   // needed ring count changes, never per push.
   private lattice: THREE.LineSegments | null = null;
   private latticeRings = -1;
-  // horizontal screen shift (px) while the chat dock is open: the board's center moves to
-  // the free area right of the dock, so an open chat never buries the beans under glass
-  private shiftX = 0;
+  // hover picking is throttled: exact on every pointer move, and a slow heartbeat
+  // otherwise (the world drifts under a still cursor) — never a full-rate raycast loop
+  private rayTargets: THREE.Object3D[] = [];
+  private rayDirty = true;
+  private pickDirty = true;
+  private pickTick = 0;
+  // the portrait: open a bean and the camera flies to a face-on close-up while the
+  // rest of the world sinks into the fog and the board eases right of the chat dock.
+  // All three (flight, fog, shift) are springs off ONE fact — portraitSid.
+  private portraitSid: string | null = null;
+  private fogCur = 0.013;
+  private shiftCur = 0;
   private fit: () => void;
 
   constructor(private root: HTMLElement, private bridge: Bridge) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // antialias off on purpose: every frame goes through the EffectComposer's render
+    // target, where MSAA never applies — the flag only taxes the unused framebuffer
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.setClearColor(WORLD_BG);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     root.appendChild(this.renderer.domElement);
@@ -988,10 +1022,6 @@ export class HiveWorld {
       this.dist = Math.min(70, Math.max(7, this.dist * Math.exp(e.deltaY * 0.0012)));
       this.idleT = 0;
     }, { passive: false });
-    cv.addEventListener("dblclick", () => {
-      if (this.renameEl) return;               // typing a name — a stray dblclick must not switch chat
-      if (this.hovered) this.openChat(this.hovered);
-    });
     window.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       if (this.dragSession) { this.dropSessionDrag(false, true); return; }   // Esc aborts a carry
@@ -1033,10 +1063,11 @@ export class HiveWorld {
       const w = root.clientWidth || 1, h = root.clientHeight || 1;
       this.renderer.setSize(w, h, false);
       this.composer.setSize(w, h);
+      // bloom at half resolution: the glow is a blur by definition — full-res bloom
+      // buys nothing visible and costs the most expensive passes on the frame
+      this.bloom.setSize(w / 2, h / 2);
       cv.style.width = "100%"; cv.style.height = "100%";
       this.camera.aspect = w / h;
-      if (this.shiftX) this.camera.setViewOffset(w, h, -this.shiftX / 2, 0, w, h);
-      else this.camera.clearViewOffset();
       this.camera.updateProjectionMatrix();
     };
     this.fit();
@@ -1086,16 +1117,10 @@ export class HiveWorld {
     (window as any).__hive = this;           // debug handle (harness + console poking)
   }
 
-  // the chat dock is open: shift the board's center into the free area to its right
-  setShift(px: number) {
-    if (this.shiftX === px) return;
-    this.shiftX = px;
-    this.fit();
-  }
-
   private canvasPoint(e: PointerEvent) {
     const r = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    this.pickDirty = true;
   }
 
   private onPointerMove(e: PointerEvent) {
@@ -1131,17 +1156,13 @@ export class HiveWorld {
     if (e.button === 2 || e.shiftKey) { this.dragging = { mode: "pan", x: e.clientX, y: e.clientY }; return; }
     if (sid) {
       const pad = this.pads.get(sid);
-      if (pad) { pad.lift = -0.07; setTimeout(() => { if (this.pads.get(sid) === pad) pad.lift = this.hovered === sid ? 0.12 : 0; }, 130); }
-      // ANY press on an occupied cell switches chat ON THE DOWN — hexagon and bean alike,
-      // instant; the bean adds its pop. The same press can still become a pick-up: the
-      // switch has already happened, and seeing their chat while you carry them is
-      // coherent. That is ALL a click does: the chat on the left is the answer.
-      // EXCEPTION: the NAMEPLATE is its own affordance — clicking it edits the name in
-      // place (the city-banner pattern), so it never switches chat; the edit opens on the
-      // clean UP so a drag from the plate still picks the session up.
-      if (pad && !hit.name) {
+      // the press acknowledges INSTANTLY (dip + pop) but COMMITS nothing: the gesture
+      // decides on the up — a clean click opens the chat, movement becomes a carry
+      // (the user 2026-08-19, who kept opening chats they only meant to drag)
+      if (pad) {
+        pad.lift = -0.07;
+        setTimeout(() => { if (this.pads.get(sid) === pad) pad.lift = this.hovered === sid ? 0.12 : 0; }, 130);
         if (hit.bean) pad.pokeBean();
-        this.openChat(sid);
       }
       this.pressedPad = { sid, x: e.clientX, y: e.clientY, bean: hit.bean, name: hit.name };
     } else {
@@ -1154,10 +1175,11 @@ export class HiveWorld {
     this.pressedPad = null;
     this.dragging = null;
     if (this.dragSession) { this.dropSessionDrag(this.dragSession.over); return; }
-    if (pp) {
-      // most presses already did everything on the DOWN; the nameplate's clean click is
-      // the one action that resolves here — it opens the in-place editor
-      if (pp.name && Math.hypot(e.clientX - pp.x, e.clientY - pp.y) <= 5) this.beginBoardRename(pp.sid);
+    if (pp && Math.hypot(e.clientX - pp.x, e.clientY - pp.y) <= 5) {
+      // the clean click: the nameplate edits in place (its own affordance); everything
+      // else on the cell — hexagon or bean — opens the chat
+      if (pp.name) this.beginBoardRename(pp.sid);
+      else this.openChat(pp.sid);
     }
   }
 
@@ -1201,7 +1223,9 @@ export class HiveWorld {
       this.particles.burst(pad.beanWorldPos().setY(1.0), [0xe5484d, 0x8a8a8a, 0xffb3b6], 26, 2.6);
       pad.consumeBean();
       pad.dyingT = 0.26;
+      this.rayDirty = true;
       if (this.selected === d.sid) this.deselect();
+      if (this.portraitSid === d.sid) this.exitPortrait();
       return;
     }
     // a FREE cell under the drop re-homes them there: the user's own gesture is the one
@@ -1316,23 +1340,28 @@ export class HiveWorld {
     this.noteT = window.setTimeout(() => this.noteEl.classList.remove("show"), 4000);
   }
 
+  // ONE raycast against one flat, cached target list (rebuilt only when the cast
+  // changes) — the per-pad triple-intersect loop was the board's frame-time hog
   private pick(): { sid: string | null; bean: boolean; name: boolean } {
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    let best: { sid: string; d: number; bean: boolean; name: boolean } | null = null;
-    for (const [sid, pad] of this.pads) {
-      if (pad.dyingT >= 0) continue;
-      const hits = this.raycaster.intersectObjects(pad.hitMeshes(), false);
-      if (hits.length && (!best || hits[0].distance < best.d)) best = { sid, d: hits[0].distance, bean: false, name: false };
-      // the bean stands proud of its tile, so when both are under the pointer the bean wins
-      const bh = this.raycaster.intersectObjects(pad.beanMeshes(), false);
-      if (bh.length && (!best || bh[0].distance < best.d)) best = { sid, d: bh[0].distance, bean: true, name: false };
-      // …and the READABLE nameplate wins over its own tile (it sits a hair above it)
-      const nh = this.raycaster.intersectObjects(pad.nameMeshes(), false);
-      if (nh.length && pad.nameVisible() && (!best || nh[0].distance <= best.d)) {
-        best = { sid, d: nh[0].distance, bean: false, name: true };
+    if (this.rayDirty) {
+      this.rayDirty = false;
+      this.rayTargets = [];
+      for (const pad of this.pads.values()) {
+        if (pad.dyingT < 0) this.rayTargets.push(...pad.pickTargets());
       }
     }
-    if (best) return { sid: best.sid, bean: best.bean, name: best.name };
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(this.rayTargets, false);
+    for (const h of hits) {
+      const tag = h.object.userData as { sid?: string; kind?: string };
+      if (!tag.sid) continue;
+      const pad = this.pads.get(tag.sid);
+      if (!pad || pad.dyingT >= 0) continue;
+      // an unreadable nameplate must never be a secret button — fall through to the
+      // next hit (its own tile is right underneath)
+      if (tag.kind === "name" && !pad.nameVisible()) continue;
+      return { sid: tag.sid, bean: tag.kind === "bean", name: tag.kind === "name" };
+    }
     return { sid: null, bean: false, name: false };
   }
 
@@ -1356,11 +1385,34 @@ export class HiveWorld {
     return slot >= 0 && !new Set(this.slots.values()).has(slot) ? slot : null;
   }
 
-  // the direct line to a session: its chat opens in the dock (left of the board), the hive
-  // stays put — one path, used by the bean click, the card's Open, and dblclick alike.
+  // the direct line to a session: its chat opens in the dock and the world goes to the
+  // portrait — one path, used by the bean click and the card's Open alike.
   openChat(sid: string) {
     this.lookedAt(sid);                      // going to its chat IS looking — the ✓ note retires
+    this.portraitTo(sid);
     this.bridge.openChat(sid);
+  }
+
+  // fly to the face-on close-up. Retargeting between beans mid-portrait is the same move.
+  portraitTo(sid: string) {
+    const pad = this.pads.get(sid);
+    if (!pad || pad.dyingT >= 0) return;
+    const prev = this.portraitSid && this.pads.get(this.portraitSid);
+    if (prev) prev.portrait = false;
+    this.portraitSid = sid;
+    pad.portrait = true;
+    this.dist = 3.1;
+    this.pitch = 0.3;
+    this.yaw = Math.round(this.yawCur / (Math.PI * 2)) * Math.PI * 2;   // face-on, shortest way
+    this.idleT = 0;
+  }
+
+  exitPortrait() {
+    const pad = this.portraitSid && this.pads.get(this.portraitSid);
+    if (pad) pad.portrait = false;
+    if (this.portraitSid === null) return;
+    this.portraitSid = null;
+    this.frameAll();
   }
 
   // The user's own gesture toward a session — the ONE event that clears its finished note
@@ -1476,8 +1528,9 @@ export class HiveWorld {
 
     for (const sid of diff.removed) {
       const pad = this.pads.get(sid);
-      if (pad && pad.dyingT < 0) pad.dyingT = 0;   // departure plays; disposal in the loop
+      if (pad && pad.dyingT < 0) { pad.dyingT = 0; this.rayDirty = true; }   // departure plays; disposal in the loop
       if (this.selected === sid) { this.card.gone(); this.selected = null; this.frameAll(); }
+      if (this.portraitSid === sid) this.exitPortrait();
       if (this.hovered === sid) this.hovered = null;
     }
     for (const sid of diff.added) {
@@ -1485,12 +1538,13 @@ export class HiveWorld {
       const pad = new Pad(s, this.slots.get(sid) ?? 0);
       this.pads.set(sid, pad);
       this.scene.add(pad.group);
+      this.rayDirty = true;
     }
     const changed = new Set(diff.stateChanged.map((c) => c.sid));
     const nowS = Math.floor(Date.now() / 1000);
     for (const s of sessions) {
       const pad = this.pads.get(s.sid);
-      if (pad && !diff.added.includes(s.sid)) pad.apply(s, changed.has(s.sid));
+      if (pad && !diff.added.includes(s.sid) && pad.apply(s, changed.has(s.sid))) this.rayDirty = true;
       if (this.selected === s.sid) this.card.refresh(s, nowS);
     }
     // the unseen-finished latch: completions the user hasn't gone to look at wear the ✓
@@ -1597,9 +1651,13 @@ export class HiveWorld {
     this.clock += dt;
     this.idleT += dt;
 
-    // hover pick once per frame (not per pointermove — cheaper and steadier); a carried
-    // bean under the cursor must not churn hover or drag the ghost around
-    const sid = this.dragSession ? this.hovered : this.pick().sid;
+    // hover pick: exact whenever the POINTER moved (pickDirty), a 1-in-3-frame
+    // heartbeat otherwise (the world eases under a still cursor); a carried bean
+    // must not churn hover or drag the ghost around
+    this.pickTick++;
+    const wantPick = !this.dragSession && (this.pickDirty || this.pickTick % 3 === 0);
+    this.pickDirty = false;
+    const sid = wantPick ? this.pick().sid : this.hovered;
     if (sid !== this.hovered) {
       const old = this.hovered ? this.pads.get(this.hovered) : null;
       if (old) old.lift = 0;
@@ -1645,8 +1703,24 @@ export class HiveWorld {
     this.ghostPlus.material.opacity = ease(this.ghostPlus.material.opacity, this.ghostHover ? 0.95 : 0.22, dt, 8);
     this.ghostPlus.position.y = 0.6 + (this.ghostHover ? 0.1 * Math.abs(Math.sin(this.clock * 4)) : 0);
 
+    // the portrait: everything below is a spring off portraitSid — the camera tracks the
+    // subject's hex per frame (it may still be gliding home), the fog swallows the rest
+    // of the world, and the view eases sideways to center the face right of the dock
+    const pPad = this.portraitSid ? this.pads.get(this.portraitSid) : null;
+    if (pPad && pPad.dyingT < 0) {
+      this.target.set(pPad.group.position.x, 0.78, pPad.group.position.z);
+    }
+    const fog = this.scene.fog as THREE.FogExp2;
+    this.fogCur = ease(this.fogCur, pPad ? 0.085 : 0.013, dt, 4);
+    fog.density = this.fogCur;
+    this.shiftCur = ease(this.shiftCur, pPad ? DOCK_W : 0, dt, 5);
+    const rw = this.root.clientWidth || 1, rh = this.root.clientHeight || 1;
+    if (this.shiftCur > 0.5) this.camera.setViewOffset(rw, rh, -this.shiftCur / 2, 0, rw, rh);
+    else this.camera.clearViewOffset();
+
     // idle drift: after 6s hands-off the whole board breathes on a slow orbital sway
-    const driftYaw = this.idleT > 6 ? Math.sin(this.clock * 0.1) * 0.05 : 0;
+    // (never during a portrait — a close-up must hold still)
+    const driftYaw = this.idleT > 6 && !pPad ? Math.sin(this.clock * 0.1) * 0.05 : 0;
     this.yawCur = ease(this.yawCur, this.yaw + driftYaw, dt, 5);
     this.pitchCur = ease(this.pitchCur, this.pitch, dt, 5);
     this.distCur = ease(this.distCur, this.dist, dt, 5);
@@ -1685,7 +1759,7 @@ export class HiveWorld {
         at.x += 0.25; at.z += 0.45;           // off the dead laptop, not the bean's head
         this.particles.burst(at, [0x555b63, 0x3c4148, 0x6a7076], 2, 0.22, 0.55, 1.4);
       }
-      if (st === "ready" && pad.sess.faded && Math.random() < dt * 0.8) {
+      if (st === "ready" && pad.dozing() && Math.random() < dt * 0.8) {
         const at = pad.group.position.clone(); at.y += PAD_H + 1.25;
         at.x += 0.3;
         this.particles.burst(at, [0x9cd2ff, 0x6fa8d8], 1, 0.14, 0.3, 1.8);
@@ -1699,6 +1773,7 @@ export class HiveWorld {
       this.scene.remove(pad.group);
       pad.dispose();
       this.pads.delete(psid);
+      this.rayDirty = true;
     }
     this.particles.update(dt);
 

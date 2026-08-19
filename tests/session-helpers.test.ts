@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { toolPreview, toolTitle } from "../server/session";
+import { parseTodos, toolPreview, toolTitle } from "../server/session";
 
 describe("toolTitle", () => {
   test("names the common tools by their salient argument", () => {
@@ -14,6 +14,27 @@ describe("toolTitle", () => {
   test("long paths shorten from the left", () => {
     const p = "/very/long/path/that/goes/on/forever/and/ever/src/deep/module/file.ts";
     expect(toolTitle("Read", { file_path: p })).toBe("Read …/deep/module/file.ts");
+  });
+});
+
+describe("parseTodos", () => {
+  test("maps statuses, uses activeForm for the running item, skips blanks", () => {
+    const todos = parseTodos({ todos: [
+      { content: "write tests", status: "completed", activeForm: "Writing tests" },
+      { content: "build parser", status: "in_progress", activeForm: "Building the parser" },
+      { content: "ship it", status: "pending" },
+      { content: "   ", status: "pending" },
+    ] });
+    expect(todos).toEqual([
+      { text: "write tests", st: "done" },
+      { text: "Building the parser", st: "active" },
+      { text: "ship it", st: "pending" },
+    ]);
+  });
+
+  test("garbage input yields an empty list, never a throw", () => {
+    expect(parseTodos(null)).toEqual([]);
+    expect(parseTodos({ todos: "nope" })).toEqual([]);
   });
 });
 

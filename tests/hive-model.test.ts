@@ -4,8 +4,8 @@ import { diffSessions, ENDING_ACK_MS, foldEnding, foldSeenAsk, foldSeenDone, isK
 function sess(over: Partial<HiveSession> = {}): HiveSession {
   return {
     sid: "s1", name: "web", color: { bg: "#1EA1EB", fg: "#10141a" },
-    state: "ready", faded: false, goal: null, brief: null, narration: null,
-    needsYou: false, needsYouT: 0, liveAsk: false, doneT: 0, bgTasks: 0,
+    state: "ready", lastT: 9_990, goal: null, brief: null, narration: null,
+    needsYou: false, needsYouT: 0, liveAsk: false, doneT: 0, todos: [], bg: [],
     topIds: [], doneTopIds: [], model: "fable", effort: "max",
     permMode: "bypassPermissions", cwd: "/tmp", cost: 0,
     ...over,
@@ -60,10 +60,13 @@ describe("stateLine", () => {
     expect(stateLine(sess({ state: "awaiting", liveAsk: false, needsYouT: now - 3600 * 9 }), now))
       .toBe("needs you — asked 9h ago");
     expect(stateLine(sess({ state: "blocked", brief: "API 500" }), now)).toBe("stopped — API 500");
-    expect(stateLine(sess({ state: "ready", faded: true }), now)).toBe("idle for a while");
-    expect(stateLine(sess({ state: "awaitingBg", bgTasks: 2 }), now))
+    // faded DERIVES from lastT at render time — no pushed flag, no timer
+    expect(stateLine(sess({ state: "ready", lastT: now - 7200 }), now)).toBe("idle for a while");
+    expect(stateLine(sess({ state: "ready", lastT: now - 60 }), now)).toBe("ready");
+    const bg = (n: number) => Array.from({ length: n }, (_, i) => ({ id: "b" + i, type: "task", desc: "d" }));
+    expect(stateLine(sess({ state: "awaitingBg", bg: bg(2) }), now))
       .toBe("idle — 2 background tasks running");
-    expect(stateLine(sess({ state: "awaitingBg", bgTasks: 1 }), now))
+    expect(stateLine(sess({ state: "awaitingBg", bg: bg(1) }), now))
       .toBe("idle — 1 background task running");
   });
 

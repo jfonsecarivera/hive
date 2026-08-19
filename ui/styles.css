@@ -237,10 +237,10 @@ button { font-family: inherit; }
 #chat-dock {
   position: fixed; top: 0; left: 0; bottom: 0; width: 460px; z-index: 10;
   display: flex; flex-direction: column;
-  background: rgba(11, 14, 19, 0.97);
+  background: rgba(11, 14, 19, 0.88);
   border-right: 1px solid var(--hairline);
   box-shadow: 12px 0 40px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(14px);
   transform: translateX(-102%);
   transition: transform 0.24s cubic-bezier(0.2, 0.9, 0.3, 1.05);
   font: 13px/1.5 var(--font); color: var(--text);
@@ -281,6 +281,26 @@ button { font-family: inherit; }
 #chat-dock .cd-goal { padding: 7px 14px; font-size: 12px; color: var(--dim);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* the agent's own to-dos + its live background tasks — standing state, always in view */
+#chat-dock .cd-tasks { padding: 6px 14px 8px; max-height: 150px; overflow-y: auto;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex; flex-direction: column; gap: 2px;
+  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.14) transparent; }
+#chat-dock .cd-tasks .td, #chat-dock .cd-tasks .bgt {
+  display: flex; align-items: baseline; gap: 7px; font-size: 12px; min-width: 0; }
+#chat-dock .cd-tasks i { font-style: normal; flex: 0 0 12px; text-align: center; }
+#chat-dock .cd-tasks span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#chat-dock .cd-tasks .td.done { color: #5f6874; }
+#chat-dock .cd-tasks .td.done i { color: #1ea1eb; }
+#chat-dock .cd-tasks .td.done span { text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.25); }
+#chat-dock .cd-tasks .td.active { color: #e8edf3; font-weight: 600; }
+#chat-dock .cd-tasks .td.active i { color: var(--gold); animation: t-pulse 1.2s ease infinite; }
+#chat-dock .cd-tasks .td.pending { color: var(--dim); }
+#chat-dock .cd-tasks .bgt { color: var(--green); }
+#chat-dock .cd-tasks .bgt i { animation: bg-spin 2.4s linear infinite; display: inline-block; }
+@keyframes bg-spin { to { transform: rotate(360deg); } }
 
 #chat-dock .cd-feed {
   flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;

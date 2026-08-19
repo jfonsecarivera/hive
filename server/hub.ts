@@ -38,8 +38,7 @@ export class Hub {
       this.wire(s);
       this.sessions.set(s.sid, s);
     }
-    // faded is time-derived (ready >1h): a slow re-publish keeps the doze cue honest
-    setInterval(() => this.publishHive(), 60_000);
+    // (no display-refresh timer: "faded" derives client-side from lastT at render time)
     // adopt the machine's existing Claude Code sessions (romp, terminal, anything) as
     // dormant beans — at boot and then on a slow rescan for sessions born elsewhere
     void this.adopt();

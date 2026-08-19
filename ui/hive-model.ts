@@ -20,6 +20,13 @@ export interface HiveDiff {
   goalDone: string[];                       // sids where a KNOWN top goal newly completed
 }
 
+// "faded" (the doze cue) DERIVES from lastT at render time — no server timer, no push
+// needed for a bean to nod off; the frame loop just crosses the threshold.
+export const FADE_AFTER_S = 3600;
+export function isFaded(s: HiveSession, now: number): boolean {
+  return s.state === "ready" && now - s.lastT > FADE_AFTER_S;
+}
+
 // Compact age for state lines ("2m", "1h").
 export function hiveAge(secs: number): string {
   secs = Math.max(0, Math.floor(secs));
@@ -45,14 +52,14 @@ export function stateLine(s: HiveSession, now: number): string {
     case "blocked": return s.brief ? `stopped — ${s.brief}` : "stopped on an error";
     case "retrying": return s.brief || "hitting API errors, retrying";
     case "awaitingBg":
-      return s.bgTasks > 0
-        ? `idle — ${s.bgTasks} background task${s.bgTasks === 1 ? "" : "s"} running`
+      return s.bg.length > 0
+        ? `idle — ${s.bg.length} background task${s.bg.length === 1 ? "" : "s"} running`
         : "idle, waiting on background work";
     case "compacting": return "compacting its context";
     case "clearing": return "clearing its context";
     case "interrupting": return "stopping…";
     case "opening": return "starting up";
-    case "ready": return s.faded ? "idle for a while" : "ready";
+    case "ready": return isFaded(s, now) ? "idle for a while" : "ready";
     default:
       return `in a state hive doesn't know: "${s.state}"`;
   }
