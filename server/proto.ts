@@ -126,6 +126,7 @@ export type ClientOp =
       allow?: boolean; always?: boolean; deny?: boolean;
       answers?: Record<string, string | string[]> }
   | { op: "watch"; sid: string }
+  | { op: "older"; sid: string; before: string }   // page history backward from an event id
   | { op: "unwatch"; sid: string }
   | { op: "summon"; name: string }        // hire a shelf specialist (duty tray drag)
   | { op: "unsave"; name: string }        // remove a specialist from the shelf for good
@@ -134,7 +135,9 @@ export type ClientOp =
 // server → client
 export type ServerMsg =
   | { type: "hive"; sessions: SessionSnap[] }
-  | { type: "chat"; sid: string; reset?: boolean; events: ChatEvent[] }
+  // reset = the watch window (newest slice); older = a backward page to PREPEND;
+  // more = further history exists above what was sent
+  | { type: "chat"; sid: string; reset?: boolean; older?: boolean; more?: boolean; events: ChatEvent[] }
   | { type: "caps"; sid: string; commands: CmdInfo[] }
   | { type: "etas"; etas: EtaRow[] }
   | { type: "weather"; w: Weather }

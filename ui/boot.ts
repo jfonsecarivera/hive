@@ -50,7 +50,7 @@ net.on((m: ServerMsg) => {
       first = false;
       break;
     case "chat":
-      dock.apply(m.sid, m.events, m.reset);
+      dock.apply(m.sid, m.events, { reset: m.reset, older: m.older, more: m.more });
       break;
     case "caps":
       dock.setCaps(m.sid, m.commands);

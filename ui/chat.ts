@@ -34,6 +34,8 @@ export class ChatDock {
   private sess: HiveSession | null = null;
   private renaming = false;
   private askPicks = new Map<string, Map<number, { picks: Set<number>; custom: string }>>();
+  private moreOlder = false;                 // history exists above the rendered window
+  private earlierEl: HTMLElement | null = null;
   // dynamic slash commands (the session's own list) + the autocomplete menu state
   private commands: CmdInfo[] = [];
   private menuEl: HTMLElement;
@@ -91,6 +93,7 @@ export class ChatDock {
       stop: () => this.interrupt(),
       jump: () => this.scrollToEnd(true),
       rename: () => this.startRename(),
+      older: (btn) => this.loadOlder(btn as HTMLButtonElement),
       fold: (btn) => {
         const body = btn.parentElement?.querySelector(".t-body") as HTMLElement | null;
         if (body) body.hidden = !body.hidden;
@@ -159,6 +162,8 @@ export class ChatDock {
       this.commands = [];
       this.tasksKey = "";
       this.tasksEl.hidden = true;
+      this.moreOlder = false;
+      this.earlierEl = null;                 // the feed clear discards the old node
       this.hideMenu();
       this.op({ op: "watch", sid });
       this.pinned = true;
@@ -268,10 +273,16 @@ export class ChatDock {
     this.menuIdx = 0;
   }
 
-  // ── events in (reset = full history replay) ────────────────────────────────────
-  apply(sid: string, events: ChatEvent[], reset?: boolean) {
+  // ── events in: reset = the watch window (newest slice), older = a page to PREPEND,
+  // otherwise live arrivals. History pages in on demand — a click must never pay for
+  // the whole life story up front (the render freeze WAS the slow click, 2026-08-20).
+  apply(sid: string, events: ChatEvent[], opts?: { reset?: boolean; older?: boolean; more?: boolean }) {
     if (sid !== this.sid) return;
-    if (reset) {
+    if (opts?.older) {
+      this.prependOlder(events, !!opts.more);
+      return;
+    }
+    if (opts?.reset) {
       this.rows.clear();
       this.order = [];
       this.feed.replaceChildren();
@@ -281,7 +292,68 @@ export class ChatDock {
       requestAnimationFrame(() => requestAnimationFrame(() => this.feed.classList.remove("bulk")));
     }
     for (const ev of events) this.upsert(ev);
+    if (opts?.reset) this.setEarlier(!!opts.more);
     this.queueScroll();
+  }
+
+  // the "show earlier" control at the feed's top — present exactly while more history
+  // exists above what's rendered
+  private setEarlier(more: boolean) {
+    this.moreOlder = more;
+    if (!more) {
+      this.earlierEl?.remove();
+      this.earlierEl = null;
+      return;
+    }
+    if (!this.earlierEl) {
+      const d = document.createElement("div");
+      d.className = "cd-earlier";
+      d.innerHTML = '<button data-act="older">↑ show earlier</button>';
+      this.earlierEl = d;
+    }
+    const btn = this.earlierEl.querySelector("button") as HTMLButtonElement;
+    btn.disabled = false;
+    btn.textContent = "↑ show earlier";
+    this.feed.prepend(this.earlierEl);
+  }
+
+  private loadOlder(btn: HTMLButtonElement) {
+    if (!this.sid || !this.moreOlder) return;
+    const before = this.order[0];
+    if (!before) return;
+    btn.disabled = true;
+    btn.textContent = "loading…";
+    this.op({ op: "older", sid: this.sid, before });
+  }
+
+  // older history lands ABOVE the current view: built as one still batch, scroll
+  // anchored so the line the reader was on doesn't move
+  private prependOlder(events: ChatEvent[], more: boolean) {
+    const frag = document.createDocumentFragment();
+    let act: HTMLElement | null = null;
+    const ids: string[] = [];
+    for (const ev of events) {
+      if (this.rows.has(ev.id)) continue;
+      const el = this.build(ev);
+      this.rows.set(ev.id, { ev, el });
+      ids.push(ev.id);
+      if (ev.k === "tool") {
+        if (!act) { act = document.createElement("div"); act.className = "m-act"; frag.appendChild(act); }
+        act.appendChild(el);
+        continue;
+      }
+      if (ev.k === "sum" && act) { act.appendChild(el); act = null; continue; }
+      act = null;
+      frag.appendChild(el);
+    }
+    this.order = [...ids, ...this.order];
+    this.feed.classList.add("bulk");
+    const prevH = this.feed.scrollHeight, prevTop = this.feed.scrollTop;
+    const anchor = this.earlierEl?.isConnected ? this.earlierEl.nextSibling : this.feed.firstChild;
+    this.feed.insertBefore(frag, anchor);
+    this.setEarlier(more);
+    this.feed.scrollTop = prevTop + (this.feed.scrollHeight - prevH);
+    requestAnimationFrame(() => requestAnimationFrame(() => this.feed.classList.remove("bulk")));
   }
 
   // follow-scroll once per FRAME, not per message — scrollTop forces a layout flush,

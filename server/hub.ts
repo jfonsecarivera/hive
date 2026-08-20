@@ -481,8 +481,12 @@ export class Hub {
     this.publish("hive", this.hiveMsg());
   }
 
-  history(sid: string): ChatEvent[] {
-    return this.store.events(sid);
+  historyTail(sid: string): { events: ChatEvent[]; more: boolean } {
+    return this.store.eventsTail(sid);
+  }
+
+  historyBefore(sid: string, before: string): { events: ChatEvent[]; more: boolean } {
+    return this.store.eventsBefore(sid, before);
   }
 
   create(op: Extract<ClientOp, { op: "create" }>): AgentSession {

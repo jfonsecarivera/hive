@@ -172,8 +172,14 @@ function handle(ws: Bun.ServerWebSocket<WsData>, op: ClientOp) {
     case "watch": {
       ws.data.watching.add(op.sid);
       ws.subscribe(`chat:${op.sid}`);
-      ws.send(JSON.stringify({ type: "chat", sid: op.sid, reset: true, events: hub.history(op.sid) } satisfies ServerMsg));
+      const tail = hub.historyTail(op.sid);
+      ws.send(JSON.stringify({ type: "chat", sid: op.sid, reset: true, more: tail.more, events: tail.events } satisfies ServerMsg));
       ws.send(hub.capsMsg(op.sid));
+      break;
+    }
+    case "older": {
+      const page = hub.historyBefore(op.sid, op.before);
+      ws.send(JSON.stringify({ type: "chat", sid: op.sid, older: true, more: page.more, events: page.events } satisfies ServerMsg));
       break;
     }
     case "unwatch":

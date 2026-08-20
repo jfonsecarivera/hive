@@ -171,7 +171,7 @@ net.on((m: ServerMsg) => {
     renderEtas();
     dock.refresh(m.sessions);
   }
-  if (m.type === "chat") dock.apply(m.sid, m.events, m.reset);
+  if (m.type === "chat") dock.apply(m.sid, m.events, { reset: m.reset, older: m.older, more: m.more });
   if (m.type === "caps") dock.setCaps(m.sid, m.commands);
   if (m.type === "defaults") {
     hostEl.textContent = "⬡ " + m.host;

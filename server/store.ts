@@ -119,6 +119,28 @@ export class Store {
     return rows.reverse().map((r) => JSON.parse(r.json) as ChatEvent);
   }
 
+  // The watch window: the newest slice, with older pages on demand — a click must never
+  // pay for a session's whole life story up front (measured 2026-08-20: 500-event watch
+  // floods froze the click for seconds over a tunnel and starved the board's clock).
+  eventsTail(sid: string, limit = 150): { events: ChatEvent[]; more: boolean } {
+    const rows = this.db.query(
+      "SELECT json FROM chat WHERE sid = $sid ORDER BY seq DESC LIMIT $limit",
+    ).all({ $sid: sid, $limit: limit + 1 }) as { json: string }[];
+    const more = rows.length > limit;
+    return { events: rows.slice(0, limit).reverse().map((r) => JSON.parse(r.json) as ChatEvent), more };
+  }
+
+  eventsBefore(sid: string, beforeId: string, limit = 150): { events: ChatEvent[]; more: boolean } {
+    const at = this.db.query("SELECT seq FROM chat WHERE sid = $sid AND id = $id")
+      .get({ $sid: sid, $id: beforeId }) as { seq: number } | null;
+    if (!at) return { events: [], more: false };
+    const rows = this.db.query(
+      "SELECT json FROM chat WHERE sid = $sid AND seq < $seq ORDER BY seq DESC LIMIT $limit",
+    ).all({ $sid: sid, $seq: at.seq, $limit: limit + 1 }) as { json: string }[];
+    const more = rows.length > limit;
+    return { events: rows.slice(0, limit).reverse().map((r) => JSON.parse(r.json) as ChatEvent), more };
+  }
+
   setDuty(sid: string, everyS: number, prompt: string, nowT: number, selfPaced = false) {
     this.db.query(`INSERT INTO duties(sid, every_s, prompt, last_run_t, created_t, self_paced)
       VALUES($sid,$e,$p,$t,$t,$sp)

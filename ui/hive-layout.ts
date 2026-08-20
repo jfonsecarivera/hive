@@ -151,7 +151,11 @@ export function frameDt(nowMs: number, lastMs: number): number {
   if (!Number.isFinite(nowMs) || !Number.isFinite(lastMs) || lastMs < 0) return 1 / 60;
   const dt = (nowMs - lastMs) / 1000;
   if (dt <= 0) return 1 / 60;
-  return Math.min(0.05, dt);
+  // clamp at 100ms, matching the sim's 6-step catch-up: frames up to 100ms land at TRUE
+  // speed instead of bending the world's clock (59-76ms frames under load ran the board
+  // in visible slow motion, then "sped up" as the machine calmed — measured 2026-08-20);
+  // anything longer is a real freeze and sheds time on purpose, never fast-forwards
+  return Math.min(0.1, dt);
 }
 
 // World-space radius of the occupied board (for camera framing): the farthest pad center

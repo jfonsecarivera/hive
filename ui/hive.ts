@@ -2277,14 +2277,16 @@ export class HiveWorld {
   private frame = (now: number) => {
     if (!this.running) return;
     const t0 = performance.now();
-    // the 60Hz grid: accumulate real time; simulate+render only when a full step is due
+    // the 60Hz grid: accumulate real time; simulate+render only when a full step is due.
+    // The 6-step (100ms) budget matches frameDt's clamp: stall frames land at true speed
+    // (springs stay stable — max omega 16 × 0.1 = 1.6 < 2); longer freezes shed time.
     const STEP = 1 / 60;
-    this.simAcc = Math.min(this.simAcc + frameDt(now, this.lastFrame), 3 * STEP);
+    this.simAcc = Math.min(this.simAcc + frameDt(now, this.lastFrame), 6 * STEP);
     this.lastFrame = now;
     if (this.simAcc < STEP) { requestAnimationFrame(this.frame); return; }
     const dt = STEP * Math.floor(this.simAcc / STEP);   // 30fps rAF → one 2-step tick: true speed
     this.simAcc -= dt;
-    // the stats read RAW deltas (frameDt clamps at 50ms — real stalls are bigger)
+    // the stats read RAW deltas (frameDt clamps at 100ms — real stalls are bigger)
     if (this.lastRaw >= 0) {
       const raw = (now - this.lastRaw) / 1000;
       if (raw > 0 && raw < 2) {

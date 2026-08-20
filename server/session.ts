@@ -4,6 +4,7 @@
 // never on timers (the romp design rule this app inherits).
 import { existsSync, mkdirSync } from "node:fs";
 import { query, type McpSdkServerConfigWithInstance, type ModelInfo, type Options, type PermissionResult, type PermissionUpdate, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { loadPreamble, prefixOutgoing } from "./preamble";
 import type { AskQuestion, BgTask, ChatEvent, CmdInfo, ModelChoice, SessionSnap, TodoItem, WireState } from "./proto";
 
 const INPUT_CAP = 2000;
@@ -142,6 +143,7 @@ export class AgentSession {
   private bg: BgTask[] = [];                    // live background tasks (replace semantics)
   private todos: TodoItem[] = [];               // the agent's TodoWrite list, latest write wins
   commands: CmdInfo[] = [];                     // the session's dynamic slash commands
+  private preambleSent = false;             // the standing preamble's full text went out this conversation
   private turnStart = 0;
   private turnTools = 0;
   private curTurnId: string | null = null;
@@ -563,6 +565,7 @@ export class AgentSession {
         break;
       case "conversation_reset":
         this.clearing = false;
+        this.preambleSent = false;          // a cleared context lost the standing preamble
         this.note("context cleared");
         this.settle();
         break;
@@ -726,9 +729,15 @@ export class AgentSession {
       this.inflight = true;
     }
     if (this.state === "blocked") this.brief = null;
+    // the standing preamble rides the wire only — the chat bubble stays the user's words
+    const pre = prefixOutgoing(text, loadPreamble(), this.preambleSent);
+    if (pre.sentNow) {
+      this.preambleSent = true;
+      this.note("standing preamble rode ahead of this message (full text once per conversation, a one-line marker after — ~/.hive/preamble.md)");
+    }
     this.pending.push({
       type: "user",
-      message: { role: "user", content: [{ type: "text", text }] },
+      message: { role: "user", content: [{ type: "text", text: pre.wire }] },
       parent_tool_use_id: null,
       session_id: this.claudeSessionId ?? "",
     } as SDKUserMessage);

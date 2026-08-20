@@ -75,7 +75,8 @@ describe("lattice", () => {
 
 describe("frameDt", () => {
   test("clamps huge steps, floors non-positive and bogus steps", () => {
-    expect(frameDt(1000, 900)).toBeCloseTo(0.05);
+    expect(frameDt(1000, 900)).toBeCloseTo(0.1);    // a 100ms frame still runs at true speed
+    expect(frameDt(1000, 700)).toBeCloseTo(0.1);    // …but a real freeze is clamped (sheds time)
     expect(frameDt(1000, 990)).toBeCloseTo(0.01);
     expect(frameDt(900, 1000)).toBeCloseTo(1 / 60);
     expect(frameDt(NaN, 0)).toBeCloseTo(1 / 60);

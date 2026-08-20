@@ -5,7 +5,7 @@
 
 // One velocity step of a damped spring toward `target` — the caller then integrates
 // `x += v·dt` with the NEW velocity (semi-implicit Euler, stable for the board's fixed
-// 60Hz sim up to its 3-step catch-up while omega·dt < 2). Split this way so the frame
+// 60Hz sim up to its 6-step catch-up while omega·dt < 2). Split this way so the frame
 // loop stays allocation-free: no tuple, two plain number assignments at the call site.
 // zeta < 1 overshoots and wobbles (jelly); zeta ≥ 1 settles without crossing.
 export function springVel(
