@@ -1,72 +1,85 @@
-/* hive/go — the phone layout: header strip, ETA card, and the ChatDock re-plumbed
-   into one column (loaded AFTER styles.css, so these overrides win). */
+/* hive/go — the pocket board. The ETA board IS the page (eta-dash's shape); chat is a
+   full-screen slide-over. Loaded after styles.css, so overrides here win. */
 body.go { display: flex; flex-direction: column; height: 100dvh; overflow: hidden;
   padding-top: env(safe-area-inset-top); }
 
 #go-head { flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px 8px; border-bottom: 1px solid var(--hairline); min-width: 0; }
-#go-host { flex: 0 0 auto; font: 600 12px var(--font); color: rgba(156, 210, 255, 0.6);
+  padding: 12px 14px 8px; }
+#go-host { font: 600 13px var(--font); color: rgba(156, 210, 255, 0.65);
   letter-spacing: 0.1em; text-transform: lowercase; white-space: nowrap; }
-#go-strip { flex: 1 1 auto; min-width: 0; display: flex; gap: 6px; overflow-x: auto;
-  scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+#go-meta { margin-left: auto; font: 12px var(--font); color: #59636e;
+  font-variant-numeric: tabular-nums; }
+#go-mgr { flex: 0 0 auto; cursor: pointer; background: rgba(156, 210, 255, 0.08);
+  border: 1px solid rgba(156, 210, 255, 0.3); border-radius: 999px;
+  color: var(--accent); font: 600 12px var(--font); padding: 6px 13px; }
+#go-mgr:active { transform: scale(0.96); }
+
+#go-strip { flex: 0 0 auto; display: flex; gap: 6px; overflow-x: auto; padding: 2px 14px 10px;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  border-bottom: 1px solid var(--hairline); }
 #go-strip::-webkit-scrollbar { display: none; }
 .go-chip { flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
   background: rgba(255, 255, 255, 0.045); border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 999px; color: var(--dim); font: 12px var(--font); padding: 5px 11px;
   cursor: pointer; white-space: nowrap; }
-.go-chip.on { border-color: var(--accent); color: #e8edf3;
-  background: rgba(156, 210, 255, 0.1); }
+.go-chip.on { border-color: var(--accent); color: #e8edf3; background: rgba(156, 210, 255, 0.1); }
 .go-chip i { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 6px currentColor; }
 
-#go-eta { flex: 0 0 auto; border-bottom: 1px solid var(--hairline);
-  max-height: 42dvh; display: flex; flex-direction: column; }
-#go-eta-head { display: flex; align-items: baseline; gap: 6px; background: none; border: 0;
-  cursor: pointer; padding: 8px 14px 6px; text-align: left;
-  font: 600 10px var(--font); color: #8a949f; text-transform: uppercase; letter-spacing: 0.1em; }
-#go-eta-head i { font-style: normal; font-size: 9px; }
-#go-eta-head em { font-style: normal; color: #59636e; margin-left: auto; letter-spacing: 0; }
-#go-eta-body { overflow-y: auto; padding: 0 14px 10px; font-size: 13px; }
-#go-eta-body.closed { display: none; }
-#go-eta-body table, #go-eta-body pre { font-size: 12px; }
-.go-dim { color: var(--dim); }
+/* ── the board ── */
+#go-board { flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: 4px 14px calc(24px + env(safe-area-inset-bottom));
+  -webkit-overflow-scrolling: touch; }
+.go-empty { display: flex; flex-direction: column; gap: 8px; align-items: center;
+  text-align: center; padding: 56px 20px; }
+.go-empty b { font: 600 16px var(--font); color: rgba(215, 220, 227, 0.9); }
+.go-empty span { font: 13px var(--font); color: var(--dim); }
+.go-empty .go-dim { font-size: 12px; }
+#go-summon-eta { margin-top: 10px; cursor: pointer; border: 1px solid rgba(244, 196, 48, 0.5);
+  border-radius: 12px; background: rgba(244, 196, 48, 0.12); color: #ffd75e;
+  font: 600 15px var(--font); padding: 13px 20px; }
+#go-summon-eta:disabled { opacity: 0.7; }
 
-/* the ETA board rows (the eta-dash vocabulary: dot · name · countdown, gist under,
-   tap for the fold; late countdowns go amber; dim ranks sink) */
-.eta-list { display: flex; flex-direction: column; }
-.eta-row { padding: 10px 2px; border-top: 1px solid rgba(255, 255, 255, 0.07); cursor: pointer; }
+.eta-list { display: flex; flex-direction: column;
+  background: rgba(255, 255, 255, 0.025); border: 1px solid var(--hairline);
+  border-radius: 14px; overflow: hidden; margin-top: 8px; }
+.eta-row { padding: 12px 14px; border-top: 1px solid rgba(255, 255, 255, 0.07); cursor: pointer; }
 .eta-row:first-child { border-top: 0; }
 .eta-row.dim { opacity: 0.55; }
 .er-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.er-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; align-self: center;
-  box-shadow: 0 0 7px currentColor; }
+.er-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; align-self: center;
+  box-shadow: 0 0 8px currentColor; }
 .er-name { font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
 .er-cd { margin-left: auto; flex: none; font-variant-numeric: tabular-nums;
-  font: 650 16px var(--mono); white-space: nowrap; }
-.er-cd.word { font: 600 12px var(--font); color: var(--dim); }
+  font: 650 17px var(--mono); white-space: nowrap; }
+.er-cd.word { font: 600 12.5px var(--font); color: var(--dim); }
 .er-cd.late { color: var(--gold); }
-.er-gist { color: #b9c1ca; font-size: 13px; margin: 2px 0 0 17px;
+.er-gist { color: #b9c1ca; font-size: 13px; margin: 3px 0 0 18px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .eta-row.open .er-gist { white-space: normal; }
-.er-fold { display: none; flex-direction: column; gap: 5px; margin: 8px 0 2px 17px;
-  padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.07);
-  color: var(--dim); font-size: 12.5px; }
+.er-fold { display: none; flex-direction: column; gap: 6px; margin: 9px 0 2px 18px;
+  padding-top: 9px; border-top: 1px solid rgba(255, 255, 255, 0.07);
+  color: var(--dim); font-size: 13px; }
 .eta-row.open .er-fold { display: flex; }
 .er-fold > div:empty { display: none; }
+.er-actions { display: flex; align-items: center; gap: 10px; }
 .er-upd { font-size: 11px; color: #59636e; }
+.er-chat { margin-left: auto; cursor: pointer; background: none;
+  border: 1px solid rgba(156, 210, 255, 0.35); border-radius: 8px;
+  color: var(--accent); font: 600 12px var(--font); padding: 5px 11px; }
 
-#go-chat-slot { flex: 1 1 auto; min-height: 0; position: relative; }
-#go-summon { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%);
-  z-index: 12; cursor: pointer; border: 1px solid rgba(244, 196, 48, 0.5); border-radius: 12px;
-  background: rgba(244, 196, 48, 0.12); color: #ffd75e; font: 600 15px var(--font);
-  padding: 14px 22px; }
+/* ── the chat slide-over ── */
+#go-chat { position: fixed; inset: 0; z-index: 20; background: var(--bg);
+  padding-top: env(safe-area-inset-top); }
+#go-chat-slot { position: absolute; inset: 0; }
+#go-chat[hidden] { display: none; }
 
-/* the ChatDock, re-plumbed: fills the slot, never slides, no desktop chrome */
+/* the ChatDock, re-plumbed: fills the overlay, never slides, ✕ goes back to the board */
 #chat-dock.go-mode {
   position: absolute; inset: 0; width: 100%; transform: none !important;
   border-right: 0; box-shadow: none; background: transparent;
   transition: none; font-size: 15px;
 }
-#chat-dock.go-mode .cd-x { display: none; }              /* the page IS the chat */
+#chat-dock.go-mode .cd-x { display: block; font-size: 24px; padding: 2px 10px; }
 #chat-dock.go-mode .cd-feed { padding: 14px 12px 10px; }
 #chat-dock.go-mode .cd-compose { padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
 #chat-dock.go-mode .cd-input { font-size: 16px; }        /* 16px stops iOS zoom-on-focus */

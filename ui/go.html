@@ -12,15 +12,20 @@
 <link rel="stylesheet" href="/dist/go.css">
 </head>
 <body class="go">
+<!-- the BOARD is the page (eta-dash's shape): ETAs front and center, chat behind a tap -->
 <header id="go-head">
   <span id="go-host">⬡</span>
-  <div id="go-strip"></div>
+  <span id="go-meta"></span>
+  <button id="go-mgr">manager ›</button>
 </header>
-<section id="go-eta">
-  <button id="go-eta-head"><i>▾</i> ETAs <em id="go-eta-age"></em></button>
-  <div id="go-eta-body" class="md"></div>
+<div id="go-strip"></div>
+<main id="go-board">
+  <div id="go-eta-body"></div>
+</main>
+<!-- the chat: a full-screen slide-over; ✕ returns to the board -->
+<section id="go-chat" hidden>
+  <div id="go-chat-slot"></div>
 </section>
-<main id="go-chat-slot"></main>
 <script type="module" src="/dist/go.js"></script>
 </body>
 </html>
