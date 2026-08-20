@@ -50,19 +50,18 @@ export function adoptMode(rompSize: number, coldStartDone: boolean, env: string 
 }
 
 // The romp merge: when a romp registry exists, the board mirrors ROMP'S sessions —
-// the ones the user already knows by name — not a guess from raw transcripts. Window
-// and cap still apply (romp's names/ keeps every session ever named; the board shows
-// the recent world), and known ids never slide the window deeper.
+// the ones the user already knows by name — not a guess from raw transcripts. NO time
+// window here: romp's archive is the relevance signal (a session romp still shows is
+// current however long it has idled — "never lose the thread"); the cap is the only
+// bound, newest-first, and known ids never slide it deeper.
 export function pickRompAdoptable(
   infos: SDKSessionInfo[],
   registry: ReadonlyMap<string, unknown>,
   knownClaudeIds: ReadonlySet<string>,
-  rules: AdoptRules,
+  rules: Pick<AdoptRules, "max">,
 ): SDKSessionInfo[] {
-  const cutoff = rules.nowMs - rules.days * 86_400_000;
   return infos
     .filter((i) => i.sessionId && registry.has(i.sessionId))
-    .filter((i) => (i.lastModified || 0) >= cutoff)
     .sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0))
     .slice(0, rules.max)
     .filter((i) => !knownClaudeIds.has(i.sessionId));

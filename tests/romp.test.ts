@@ -60,14 +60,14 @@ describe("pickRompAdoptable", () => {
     ({ sessionId, summary: "s", lastModified: NOW - age, cwd: "/tmp/somewhere" } as SDKSessionInfo);
   const reg = new Map([[SID_A, {}], [SID_B, {}]]);
 
-  test("only registry sessions, windowed, known-id stable — and no scratch-cwd filter", () => {
+  test("registry sessions only, NO age window (romp's archive is the relevance signal)", () => {
     const infos = [
       info(SID_A, DAY),                      // romp-named, recent → in (even with a /tmp cwd)
-      info(SID_B, 30 * DAY),                 // romp-named, too old → out
+      info(SID_B, 30 * DAY),                 // romp-named, idle for a month → STILL in
       info(SID_C, DAY),                      // not romp's → out
     ];
-    expect(pickRompAdoptable(infos, reg, new Set(), { nowMs: NOW, days: 7, max: 10 })
-      .map((i) => i.sessionId)).toEqual([SID_A]);
-    expect(pickRompAdoptable(infos, reg, new Set([SID_A]), { nowMs: NOW, days: 7, max: 10 })).toEqual([]);
+    expect(pickRompAdoptable(infos, reg, new Set(), { max: 10 })
+      .map((i) => i.sessionId)).toEqual([SID_A, SID_B]);
+    expect(pickRompAdoptable(infos, reg, new Set([SID_A, SID_B]), { max: 10 })).toEqual([]);
   });
 });
