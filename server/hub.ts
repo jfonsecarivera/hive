@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { adoptGoal, adoptMode, adoptName, historyToEvents, pickAdoptable, pickRompAdoptable } from "./adopt";
+import { TranscriptMirror } from "./mirror";
 import { readRompRegistry } from "./romp";
 import { AgentSession } from "./session";
 import { Store, type SessionRow } from "./store";
@@ -44,6 +45,9 @@ export class Hub {
     // dormant beans — at boot and then on a slow rescan for sessions born elsewhere
     void this.adopt();
     setInterval(() => void this.adopt(), 600_000);
+    // …and MIRROR the ones something else is driving: a transcript being appended is a
+    // running session, whoever the controller — the board and chat show it live
+    new TranscriptMirror(() => this.sessions.values()).start();
   }
 
   private async adopt() {

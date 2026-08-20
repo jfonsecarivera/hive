@@ -109,9 +109,15 @@ function isPlumbing(text: string): boolean {
 // user/assistant text, thinking folds, and tool rows with their inputs and results
 // (matched by tool_use_id). The agent keeps the full transcript on resume regardless
 // of how much we render.
-export function historyToEvents(msgs: SessionMessage[], t: number, cap = 120): ChatEvent[] {
+// `carryTools` (optional) persists the tool_use→row map ACROSS calls, for the live
+// mirror: a tool's result often lands in a later chunk than its call — with a carry,
+// the earlier row is updated and RE-EMITTED (same id → the UI upserts it in place).
+export function historyToEvents(
+  msgs: SessionMessage[], t: number, cap = 120,
+  carryTools?: Map<string, Extract<ChatEvent, { k: "tool" }>>,
+): ChatEvent[] {
   const out: ChatEvent[] = [];
-  const tools = new Map<string, Extract<ChatEvent, { k: "tool" }>>();
+  const tools = carryTools ?? new Map<string, Extract<ChatEvent, { k: "tool" }>>();
   for (const m of msgs) {
     if (m.parent_tool_use_id || m.parent_agent_id) continue;      // subagent internals
     if (m.type !== "user" && m.type !== "assistant") continue;
@@ -150,6 +156,7 @@ export function historyToEvents(msgs: SessionMessage[], t: number, cap = 120): C
         if (ev) {
           ev.status = b.is_error ? "err" : "ok";
           ev.output = histClip(resultText(b.content), 4000);
+          if (!out.includes(ev)) out.push(ev);   // a carried row from an earlier chunk → re-emit
         }
       }
     }

@@ -1028,6 +1028,11 @@ export class HiveWorld {
   private capEl: HTMLElement;               // standing "browser is rationing frames" chip
   private gpu = "";
   private hud: HTMLElement | null = null;
+  // fixed 60Hz simulation cadence: a ProMotion display (120 rAFs/s) and an Energy-Saver
+  // throttle (30) otherwise make the SAME motion read fast-smooth then slow-choppy in
+  // cycles (the user 2026-08-19: "I'd rather it constant"). Sim time advances on a 60Hz
+  // grid; extra rAFs are skipped outright (also halving GPU work at 120Hz).
+  private simAcc = 0;
   private fit: () => void;
 
   constructor(private root: HTMLElement, private bridge: Bridge) {
@@ -1764,7 +1769,13 @@ export class HiveWorld {
   private frame = (now: number) => {
     if (!this.running) return;
     const t0 = performance.now();
-    const dt = frameDt(now, this.lastFrame);
+    // the 60Hz grid: accumulate real time; simulate+render only when a full step is due
+    const STEP = 1 / 60;
+    this.simAcc = Math.min(this.simAcc + frameDt(now, this.lastFrame), 3 * STEP);
+    this.lastFrame = now;
+    if (this.simAcc < STEP) { requestAnimationFrame(this.frame); return; }
+    const dt = STEP * Math.floor(this.simAcc / STEP);   // 30fps rAF → one 2-step tick: true speed
+    this.simAcc -= dt;
     // the stats read RAW deltas (frameDt clamps at 50ms — real stalls are bigger)
     if (this.lastRaw >= 0) {
       const raw = (now - this.lastRaw) / 1000;
@@ -1881,8 +1892,13 @@ export class HiveWorld {
     } else this.camera.clearViewOffset();
 
     // idle drift: after 6s hands-off the whole board breathes on a slow orbital sway
-    // (never during a portrait — a close-up must hold still)
-    const driftYaw = this.idleT > 6 && !pPad ? Math.sin(this.clock * 0.1) * 0.05 : 0;
+    // (never during a portrait — a close-up must hold still). The sway starts FROM ZERO
+    // and ramps over ~3s: keying the sine to a global clock made it kick in mid-swing —
+    // a visible surge every time the hand went idle (the user 2026-08-19).
+    const driftT = this.idleT - 6;
+    const driftYaw = driftT > 0 && !pPad
+      ? Math.sin(driftT * 0.1) * 0.05 * Math.min(1, driftT / 3)
+      : 0;
     this.yawCur = ease(this.yawCur, this.yaw + driftYaw, dt, 5);
     this.pitchCur = ease(this.pitchCur, this.pitch, dt, 5);
     this.distCur = ease(this.distCur, this.dist, dt, 5);

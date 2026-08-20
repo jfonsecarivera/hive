@@ -132,6 +132,9 @@ export class AgentSession {
   private compacting = false;
   private foreignState: string | null = null;   // a wire state we don't recognize, verbatim
   private foreignSeen = new Set<string>();
+  // MIRRORED liveness: some other controller (romp, a terminal claude) is appending this
+  // session's transcript right now — the mirror drives this, never the SDK client
+  mirrorBusy = false;
   private clearing = false;                     // a /clear in flight (send → conversation_reset)
   private bg: BgTask[] = [];                    // live background tasks (replace semantics)
   private todos: TodoItem[] = [];               // the agent's TodoWrite list, latest write wins
@@ -186,7 +189,8 @@ export class AgentSession {
       sid: this.sid, name: this.name, color: this.color,
       state: this.state, lastT: this.lastT,
       goal: this.goal, brief: this.brief,
-      narration: this.inflight && this.turnStart ? { since: this.turnStart, toolUses: this.turnTools } : null,
+      narration: (this.inflight || this.mirrorBusy) && this.turnStart
+        ? { since: this.turnStart, toolUses: this.turnTools } : null,
       needsYou: this.asks.size > 0, needsYouT: this.newestAskT(), liveAsk: this.asks.size > 0,
       doneT: this.doneT, todos: this.todos, bg: this.bg,
       topIds: [...this.topIds].sort(), doneTopIds: [...this.doneTopIds].sort(),
@@ -223,6 +227,7 @@ export class AgentSession {
     if (this.retrying) return this.setState("retrying", this.brief);
     if (this.foreignState) return this.setState(this.foreignState, this.brief);
     if (this.inflight) return this.setState("working");
+    if (this.mirrorBusy) return this.setState("working");   // someone else is driving — still true
     if (this.bg.length > 0) return this.setState("awaitingBg");
     if (this.state !== "blocked") this.setState("ready", this.brief);
   }
@@ -657,6 +662,12 @@ export class AgentSession {
 
   send(text: string) {
     if (this.ended) throw new Error("this session has ended");
+    // taking over a session the mirror sees being driven: say so — two controllers on
+    // one transcript interleave rather than corrupt, but the user should know
+    if (this.mirrorBusy) {
+      this.mirrorBusy = false;
+      this.note("heads-up: another controller was driving this session moments ago — turns may interleave until it stops");
+    }
     this.ensureClient();
     const t = now();
     this.lastT = t;
@@ -700,6 +711,27 @@ export class AgentSession {
 
   rename(name: string) {
     this.name = name;
+    this.onChange(this.sid);
+  }
+
+  // ── the transcript mirror's hooks (mirror.ts): liveness for sessions SOMETHING ELSE
+  // is driving. The mirror never runs while our own client does.
+  driving(): boolean { return this.q !== null; }
+
+  mirrorEvents(evs: ChatEvent[]) {
+    for (const ev of evs) this.emit(ev);
+  }
+
+  mirrorActivity(working: boolean, newTools: number, endedTurn: boolean) {
+    this.lastT = now();
+    if (working) {
+      if (!this.mirrorBusy) { this.mirrorBusy = true; this.turnStart = now(); this.turnTools = 0; }
+      this.turnTools += newTools;
+    } else {
+      this.mirrorBusy = false;
+      if (endedTurn) this.doneT = now();     // the outside turn finished — the ✓ can wait for a look
+    }
+    this.settle();
     this.onChange(this.sid);
   }
 
