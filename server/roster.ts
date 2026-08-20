@@ -48,8 +48,10 @@ export function loadRoster(path = rosterPath()): Map<string, RosterEntry> {
     const e = v as Partial<RosterEntry>;
     if (!name.trim() || !e || typeof e.prompt !== "string" || !e.prompt.trim()) continue;
     if (typeof e.every !== "string" || parseEvery(e.every) === null) continue;
+    // a hand-written entry may carry romp's /loop habit — duties already loop
+    const prompt = e.prompt.replace(/^\s*\/loop\s+/, "");
     out.set(name.trim(), {
-      every: e.every, prompt: e.prompt,
+      every: e.every, prompt,
       ...(typeof e.model === "string" && e.model ? { model: e.model } : {}),
       ...(typeof e.effort === "string" && e.effort ? { effort: e.effort } : {}),
       ...(typeof e.cwd === "string" && e.cwd ? { cwd: e.cwd } : {}),

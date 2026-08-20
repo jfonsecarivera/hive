@@ -176,6 +176,12 @@ button { font-family: inherit; }
   font: 12px var(--font);
 }
 #hive-tray .ht-models { display: flex; gap: 10px; align-items: flex-end; }
+#hive-tray .ht-head { display: flex; align-items: baseline; gap: 5px; align-self: flex-start;
+  background: none; border: 0; cursor: pointer; padding: 0 2px;
+  font: 600 10px var(--font); color: #6b7480; text-transform: uppercase; letter-spacing: 0.08em; }
+#hive-tray .ht-head:hover { color: #aeb6c0; }
+#hive-tray .ht-head i { font-style: normal; font-size: 9px; }
+#hive-tray .ht-head em { font-style: normal; color: #4d5560; }
 /* the SHELF: saved specialists (hard-hat chips) — drag onto a hexagon to hire,
    drag to the trash dock to remove from the shelf; a live one sits dimmed */
 #hive-tray .ht-shelf { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;

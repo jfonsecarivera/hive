@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { adoptGoal, adoptMode, adoptName, historyToEvents, pickAdoptable, pickRompAdoptable } from "./adopt";
-import { dutyDue, dutyLine, parseDutyCommand } from "./duty";
+import { dutyDue, dutyLine, paceLastRun, parseDutyCommand, stripLoopPrefix } from "./duty";
 import { fmtEvery, loadRoster, parseEvery, saveRoster } from "./roster";
 import { TranscriptMirror } from "./mirror";
 import { readRompRegistry } from "./romp";
@@ -107,6 +107,13 @@ export class Hub {
     const s = this.must(sid);
     const nowS = Math.floor(Date.now() / 1000);
     if (cmd.kind === "set") {
+      // romp muscle-memory: "/duty every 10m /loop <job>" would arm the CLI's own
+      // in-process loop on top of the duty — strip it and say so
+      const lp = stripLoopPrefix(cmd.spec.prompt);
+      if (lp.stripped) {
+        cmd.spec.prompt = lp.prompt;
+        s.note("duties already loop — dropped the /loop prefix from the job");
+      }
       this.duties.set(sid, { everyS: cmd.spec.everyS, prompt: cmd.spec.prompt, lastRunT: nowS });
       this.store.setDuty(sid, cmd.spec.everyS, cmd.spec.prompt, nowS);
       // a SAVED duty follows the composer: editing the job here updates its roster entry
@@ -173,6 +180,16 @@ export class Hub {
           t.send(`(from your teammate "${from?.name || "a peer"}") ${message}`);
           return null;
         } catch (e) { return String((e as Error)?.message || e); }
+      },
+      nextRound: (fromSid, inS) => {
+        const d = this.duties.get(fromSid);
+        if (!d) return "you don't run a standing duty — nothing to pace";
+        const nowS = Math.floor(Date.now() / 1000);
+        d.lastRunT = paceLastRun(nowS, d.everyS, inS);
+        this.store.touchDuty(fromSid, d.lastRunT);
+        this.scheduleHive();                 // the board's countdown follows
+        const next = d.lastRunT + d.everyS - nowS;
+        return `next round in ${next >= 3600 ? Math.round(next / 3600) + "h" : Math.round(next / 60) + "m"}`;
       },
     };
   }

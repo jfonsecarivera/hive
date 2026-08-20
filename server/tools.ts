@@ -11,6 +11,7 @@ export interface BoardAccess {
   list(): { name: string; state: string; goal: string | null; idleS: number; duty: boolean }[];
   read(name: string, n: number): ChatEvent[] | null;     // null = no such session
   send(from: string, name: string, message: string): string | null;   // error string | null = ok
+  nextRound(fromSid: string, inS: number): string;       // self-pacing; returns the confirmation/error line
 }
 
 export function renderEvents(evs: ChatEvent[]): string {
@@ -50,6 +51,13 @@ export function hiveMcpServer(self: string, board: BoardAccess): McpSdkServerCon
           if (evs === null) return { content: [{ type: "text", text: `no session named "${a.name}" on this board` }], isError: true };
           return { content: [{ type: "text", text: renderEvents(evs) }] };
         },
+      ),
+      tool(
+        "hive_next_round",
+        "Only meaningful if you run a standing duty (a job on a loop). Call it at the END of a round to choose when your next round fires, based on what you just saw — e.g. a build 50 minutes from done deserves one check in 30m, not six on the default cadence. One call bends one interval; your standing cadence stays the fallback. Bounds: 1 minute to 24 hours.",
+        { in_seconds: z.number().int().min(1).describe("seconds until your next round"),
+          reason: z.string().max(200).describe("one short line: why this timing") },
+        async (a) => ({ content: [{ type: "text", text: board.nextRound(self, a.in_seconds) }] }),
       ),
       tool(
         "hive_send",

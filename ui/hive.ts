@@ -2098,8 +2098,21 @@ export class Tray {
     // ── the SHELF: saved specialists, hired by drag. A live one sits dimmed (already
     // on the board); dragging a chip to the trash dock removes it from the shelf. ──
     if (shelf.length) {
+      // the shelf folds away (the user 2026-08-19) — a one-line header keeps it a click
+      // deeper, and the fold survives reloads
+      const FOLD_KEY = "hive:shelfFold";
+      const head = document.createElement("button");
+      head.className = "ht-head";
       const row = document.createElement("div");
       row.className = "ht-shelf";
+      const setFold = (folded: boolean) => {
+        row.hidden = folded;
+        head.innerHTML = `<i>${folded ? "▸" : "▾"}</i> shelf <em>${shelf.length}</em>`;
+        try { localStorage.setItem(FOLD_KEY, folded ? "1" : "0"); } catch { /* private mode */ }
+      };
+      head.addEventListener("click", () => setFold(!row.hidden));
+      tray.appendChild(head);
+      setFold(localStorage.getItem(FOLD_KEY) === "1");
       for (const it of shelf) {
         const chip = document.createElement("div");
         chip.className = "ht-bean ht-duty" + (it.live ? " live" : "");
@@ -2144,6 +2157,8 @@ export class Tray {
         row.appendChild(chip);
       }
       tray.appendChild(row);
+      // fold state is applied AFTER chips exist (setFold above ran before the loop)
+      row.hidden = localStorage.getItem("hive:shelfFold") === "1";
     }
     const effKey = "hive:trayEfforts";
     let effSel: Record<string, string> = {};

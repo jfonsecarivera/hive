@@ -1,6 +1,22 @@
 import { describe, expect, test } from "bun:test";
-import { dutyDue, dutyLine, parseDutyCommand } from "../server/duty";
+import { dutyDue, dutyLine, paceLastRun, parseDutyCommand, stripLoopPrefix } from "../server/duty";
 import { renderEvents } from "../server/tools";
+
+describe("self-pacing (paceLastRun)", () => {
+  test("bends ONE interval to the requested delay, bounded 1m..24h", () => {
+    // everyS 600: asking for 1800s → next due = now + 1800
+    expect(paceLastRun(10_000, 600, 1800) + 600).toBe(10_000 + 1800);
+    expect(paceLastRun(10_000, 600, 5) + 600).toBe(10_000 + 60);           // floor
+    expect(paceLastRun(10_000, 600, 999_999) + 600).toBe(10_000 + 86_400); // ceiling
+  });
+});
+
+describe("stripLoopPrefix — duties already loop", () => {
+  test("drops a leading /loop, leaves everything else", () => {
+    expect(stripLoopPrefix("/loop check the fleet")).toEqual({ prompt: "check the fleet", stripped: true });
+    expect(stripLoopPrefix("check /loop docs")).toEqual({ prompt: "check /loop docs", stripped: false });
+  });
+});
 
 describe("parseDutyCommand", () => {
   test("set / off / status / error forms", () => {

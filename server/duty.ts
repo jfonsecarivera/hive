@@ -47,6 +47,24 @@ export function dutyDue(lastRunT: number, everyS: number, state: string, nowS: n
   return IDLE_STATES.has(state);
 }
 
+// Self-pacing (what /loop's dynamic mode had): a duty agent may end a round by naming
+// when the NEXT round should fire. Implemented as a lastRunT adjustment so the standing
+// cadence stays the fallback — one call bends one interval, never the duty itself.
+export const PACE_MIN_S = 60;
+export const PACE_MAX_S = 24 * 3600;
+
+export function paceLastRun(nowS: number, everyS: number, inS: number): number {
+  const bounded = Math.min(PACE_MAX_S, Math.max(PACE_MIN_S, Math.floor(inS)));
+  return nowS - everyS + bounded;            // next due = lastRun + everyS = now + bounded
+}
+
+// romp muscle-memory guard: a duty prompt that opens with "/loop" would arm the CLI's
+// OWN in-process loop on top of the duty — two loopers, one session. Strip it and say so.
+export function stripLoopPrefix(prompt: string): { prompt: string; stripped: boolean } {
+  const m = /^\/loop\s+([\s\S]+)$/.exec(prompt.trim());
+  return m ? { prompt: m[1].trim(), stripped: true } : { prompt, stripped: false };
+}
+
 export function dutyLine(everyS: number, lastRunT: number, nowS: number): string {
   const next = Math.max(0, lastRunT + everyS - nowS);
   const fmt = (s: number) => s >= 3600 ? `${Math.round(s / 3600)}h` : s >= 60 ? `${Math.round(s / 60)}m` : `${s}s`;
