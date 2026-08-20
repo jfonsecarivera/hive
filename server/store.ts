@@ -99,6 +99,15 @@ export class Store {
     return rows.reverse().map((r) => JSON.parse(r.json) as ChatEvent);
   }
 
+  kvGet(k: string): string | null {
+    const row = this.db.query("SELECT v FROM kv WHERE k = $k").get({ $k: k }) as { v: string } | null;
+    return row ? row.v : null;
+  }
+
+  kvSet(k: string, v: string) {
+    this.db.query("INSERT INTO kv(k,v) VALUES($k,$v) ON CONFLICT(k) DO UPDATE SET v=$v").run({ $k: k, $v: v });
+  }
+
   getDefaults(): Defaults {
     const row = this.db.query("SELECT v FROM kv WHERE k = 'defaults'").get() as { v: string } | null;
     const base: Defaults = {

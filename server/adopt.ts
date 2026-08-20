@@ -36,6 +36,19 @@ export function pickAdoptable(
     .filter((i) => !knownClaudeIds.has(i.sessionId));
 }
 
+// The adoption POLICY — pure, tested. Adoption is a MIGRATION AID, not a standing
+// sync: while a romp registry exists (the overlap window), scans mirror romp's set;
+// on a machine without romp, ONE cold-start scan seeds the board from transcripts;
+// after that, hive's own store is the sole owner of the board — deleting romp (or
+// this shim's source registry) changes nothing and re-adopts nothing.
+export type AdoptMode = "romp" | "generic" | "skip";
+export function adoptMode(rompSize: number, coldStartDone: boolean, env: string | undefined): AdoptMode {
+  if (env === "0") return "skip";
+  if (env === "force") return rompSize > 0 ? "romp" : "generic";
+  if (rompSize > 0) return "romp";
+  return coldStartDone ? "skip" : "generic";
+}
+
 // The romp merge: when a romp registry exists, the board mirrors ROMP'S sessions —
 // the ones the user already knows by name — not a guess from raw transcripts. Window
 // and cap still apply (romp's names/ keeps every session ever named; the board shows

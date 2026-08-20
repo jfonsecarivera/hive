@@ -2,7 +2,7 @@
 // snapshots out to the board ("hive" topic) and chat events to watchers ("chat:<sid>").
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { adoptGoal, adoptName, historyToEvents, pickAdoptable, pickRompAdoptable } from "./adopt";
+import { adoptGoal, adoptMode, adoptName, historyToEvents, pickAdoptable, pickRompAdoptable } from "./adopt";
 import { readRompRegistry } from "./romp";
 import { AgentSession } from "./session";
 import { Store, type SessionRow } from "./store";
@@ -47,7 +47,12 @@ export class Hub {
   }
 
   private async adopt() {
-    if (process.env.HIVE_ADOPT === "0") return;
+    // Adoption is a migration aid, never a standing sync (adoptMode owns the policy):
+    // romp's registry drives scans only while it exists — hive's own store owns the
+    // board the rest of the time, so removing romp is a non-event.
+    const romp = readRompRegistry();
+    const mode = adoptMode(romp.size, this.store.kvGet("adoptColdStart") === "1", process.env.HIVE_ADOPT);
+    if (mode === "skip") return;
     let infos;
     try {
       const sdk = await import("@anthropic-ai/claude-agent-sdk");
@@ -58,17 +63,16 @@ export class Hub {
     }
     const known = this.store.allClaudeIds();
     for (const s of this.sessions.values()) if (s.claudeSessionId) known.add(s.claudeSessionId);
-    // romp first: with a registry on this machine, the board mirrors romp's own set —
-    // same sessions, same names, same colors — so switching tools mid-work costs nothing
-    const romp = readRompRegistry();
     const rules = {
       nowMs: Date.now(),
       days: Number(process.env.HIVE_ADOPT_DAYS || 7),
-      max: Number(process.env.HIVE_ADOPT_MAX || (romp.size ? 24 : 12)),
+      max: Number(process.env.HIVE_ADOPT_MAX || (mode === "romp" ? 24 : 12)),
     };
-    const picks = romp.size
+    const picks = mode === "romp"
       ? pickRompAdoptable(infos, romp, known, rules)
       : pickAdoptable(infos, known, rules);
+    // any completed scan IS the cold start — from here on the board is hive's own
+    this.store.kvSet("adoptColdStart", "1");
     if (!picks.length) return;
     const used = new Set([...this.sessions.values()].map((s) => s.name));
     const d = this.store.getDefaults();

@@ -1,6 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import type { SDKSessionInfo, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { adoptGoal, adoptName, historyToEvents, pickAdoptable } from "../server/adopt";
+import { adoptGoal, adoptMode, adoptName, historyToEvents, pickAdoptable } from "../server/adopt";
+
+describe("adoptMode — adoption is a migration aid, not a standing sync", () => {
+  test("romp present → mirror it (the overlap window)", () => {
+    expect(adoptMode(75, false, undefined)).toBe("romp");
+    expect(adoptMode(75, true, undefined)).toBe("romp");
+  });
+
+  test("romp gone after the cold start → SKIP: hive's store owns the board", () => {
+    expect(adoptMode(0, true, undefined)).toBe("skip");
+  });
+
+  test("no romp, never seeded → one generic cold-start scan", () => {
+    expect(adoptMode(0, false, undefined)).toBe("generic");
+  });
+
+  test("HIVE_ADOPT=0 disables; =force rescans regardless of the stamp", () => {
+    expect(adoptMode(75, false, "0")).toBe("skip");
+    expect(adoptMode(0, true, "force")).toBe("generic");
+    expect(adoptMode(75, true, "force")).toBe("romp");
+  });
+});
 
 const DAY = 86_400_000;
 const NOW = 1_000 * DAY;

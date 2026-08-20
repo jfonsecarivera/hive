@@ -34,6 +34,17 @@ with a chat rebuilt from scratch. One Bun process, no kernel, no tmux, no panes.
 - **Drag and drop only** (the user, 2026-08-19): sessions are created by dragging a model
   bean from the tray onto a hexagon. No picker, no modal, anywhere.
 
+## Romp is a MIGRATION SOURCE, never a dependency (the user, 2026-08-19)
+
+Romp is being retired. `server/romp.ts` is a delete-safe shim that reads romp's state
+registry (`~/.local/state/romp/names` + `sdk/`) only to DISCOVER sessions during the
+overlap window; everything imported lives in hive's own store from that moment on.
+`adoptMode` (server/adopt.ts, tested) is the policy: romp present → mirror its set;
+romp absent after the cold-start stamp → adopt nothing, ever — deleting romp's state
+dir must be a non-event for the board. When romp is finally gone, `server/romp.ts`
+and its call sites can be deleted outright. Do not add any new code path that reads
+romp state, mimics romp wire formats, or assumes romp exists.
+
 ## Session backend
 
 SDK only (the user, 2026-08-19: one backend, whichever is best). It runs the same
