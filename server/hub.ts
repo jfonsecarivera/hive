@@ -1,14 +1,16 @@
 // The session registry: creates/revives sessions, persists every change, and fans
 // snapshots out to the board ("hive" topic) and chat events to watchers ("chat:<sid>").
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
+import { join } from "node:path";
 import { adoptGoal, adoptMode, adoptName, historyToEvents, pickAdoptable, pickRompAdoptable } from "./adopt";
 import { dutyDue, dutyLine, paceLastRun, parseDutyCommand, roundText, SELF_PACED_FALLBACK_S, stripLoopPrefix } from "./duty";
 import { fmtEvery, loadRoster, parseEvery, saveRoster } from "./roster";
 import { TranscriptMirror } from "./mirror";
 import { readRompRegistry } from "./romp";
 import { AgentSession } from "./session";
-import { hiveMcpServer, type BoardAccess } from "./tools";
+import { hiveMcpServer, notifyAllowed, type BoardAccess } from "./tools";
 import { Store, type SessionRow } from "./store";
 import { EFFORTS, MODELS, type ChatEvent, type ClientOp, type Defaults, type ModelChoice, type ServerMsg, type SessionSnap } from "./proto";
 
@@ -87,6 +89,7 @@ export class Hub {
   }
 
   private duties = new Map<string, { everyS: number; prompt: string; lastRunT: number; selfPaced: boolean }>();
+  private notifySent = new Map<string, number[]>();   // per-session notify timestamps (spam guard)
 
   private dutyTick() {
     const nowS = Math.floor(Date.now() / 1000);
@@ -182,6 +185,24 @@ export class Hub {
           t.send(`(from your teammate "${from?.name || "a peer"}") ${message}`);
           return null;
         } catch (e) { return String((e as Error)?.message || e); }
+      },
+      notify: async (fromSid, message) => {
+        const hook = notifyWebhook();
+        if (!hook) return "notifications aren't configured on this machine (no webhook)";
+        const from = this.sessions.get(fromSid);
+        const sent = this.notifySent.get(fromSid) || [];
+        const gate = notifyAllowed(sent, Date.now());
+        if (!gate.ok) return "notification NOT sent — you've hit the rate limit (4/hour); the board still shows your state";
+        gate.kept.push(Date.now());
+        this.notifySent.set(fromSid, gate.kept);
+        try {
+          const r = await fetch(hook, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ content: `⬡ hive/${from?.name || "agent"}: ${message}`.slice(0, 1900) }),
+          });
+          return r.ok ? "notified" : `notification failed (${r.status})`;
+        } catch (e) { return `notification failed: ${String((e as Error)?.message || e)}`; }
       },
       nextRound: (fromSid, inS) => {
         const d = this.duties.get(fromSid);
@@ -426,6 +447,19 @@ export class Hub {
       this.persist(s.sid);
     }
   }
+}
+
+// The user's Discord webhook — a SECRET, never in this repo: env first, else read from
+// their notify skill (~/.claude/skills/notify/SKILL.md carries it) at call time.
+let hookCache: string | null | undefined;
+function notifyWebhook(): string | null {
+  if (hookCache !== undefined) return hookCache;
+  if (process.env.HIVE_NOTIFY_WEBHOOK) return (hookCache = process.env.HIVE_NOTIFY_WEBHOOK);
+  try {
+    const md = readFileSync(join(process.env.HOME || ".", ".claude/skills/notify/SKILL.md"), "utf8");
+    const m = /(https:\/\/discord\.com\/api\/webhooks\/\S+)/.exec(md);
+    return (hookCache = m ? m[1] : null);
+  } catch { return (hookCache = null); }
 }
 
 function parse(v: string): string[] {

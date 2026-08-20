@@ -12,6 +12,16 @@ export interface BoardAccess {
   read(name: string, n: number): ChatEvent[] | null;     // null = no such session
   send(from: string, name: string, message: string): string | null;   // error string | null = ok
   nextRound(fromSid: string, inS: number): string;       // self-pacing; returns the confirmation/error line
+  notify(fromSid: string, message: string): Promise<string>;   // ping the USER (rate-limited)
+}
+
+// the notify spam guard — an agent loop must never be able to flood the user's phone.
+// Sliding window, per session; pure so the policy is tested.
+export const NOTIFY_MAX_PER_HOUR = 4;
+
+export function notifyAllowed(sentAtMs: number[], nowMs: number): { ok: boolean; kept: number[] } {
+  const kept = sentAtMs.filter((t) => nowMs - t < 3600_000);
+  return { ok: kept.length < NOTIFY_MAX_PER_HOUR, kept };
 }
 
 export function renderEvents(evs: ChatEvent[]): string {
@@ -51,6 +61,12 @@ export function hiveMcpServer(self: string, board: BoardAccess): McpSdkServerCon
           if (evs === null) return { content: [{ type: "text", text: `no session named "${a.name}" on this board` }], isError: true };
           return { content: [{ type: "text", text: renderEvents(evs) }] };
         },
+      ),
+      tool(
+        "hive_notify",
+        "Send a short notification to the USER'S PHONE. This interrupts a human: use it only when something truly needs them — a failure they must know about, work blocked on a decision only they can make, or a completion they explicitly asked to be told about. Routine progress never qualifies; the board already shows it. Rate-limited.",
+        { message: z.string().min(1).max(500).describe("1-3 lines: lead with status (done / failed / needs you), then what and where") },
+        async (a) => ({ content: [{ type: "text", text: await board.notify(self, a.message) }] }),
       ),
       tool(
         "hive_next_round",

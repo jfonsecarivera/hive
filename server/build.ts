@@ -6,7 +6,7 @@ export const ROOT = join(import.meta.dir, "..");
 
 export async function buildUi(minify = false): Promise<void> {
   const res = await Bun.build({
-    entrypoints: [join(ROOT, "ui/boot.ts")],
+    entrypoints: [join(ROOT, "ui/boot.ts"), join(ROOT, "ui/go.ts")],
     outdir: join(ROOT, "dist"),
     target: "browser",
     format: "esm",
@@ -17,4 +17,6 @@ export async function buildUi(minify = false): Promise<void> {
     for (const log of res.logs) console.error(log);
     throw new Error("UI build failed");
   }
+  // the phone page's stylesheet rides dist so /dist/* serving covers it
+  await Bun.write(join(ROOT, "dist/go.css"), Bun.file(join(ROOT, "ui/go.css")));
 }

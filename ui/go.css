@@ -1,0 +1,50 @@
+/* hive/go — the phone layout: header strip, ETA card, and the ChatDock re-plumbed
+   into one column (loaded AFTER styles.css, so these overrides win). */
+body.go { display: flex; flex-direction: column; height: 100dvh; overflow: hidden;
+  padding-top: env(safe-area-inset-top); }
+
+#go-head { flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px 8px; border-bottom: 1px solid var(--hairline); min-width: 0; }
+#go-host { flex: 0 0 auto; font: 600 12px var(--font); color: rgba(156, 210, 255, 0.6);
+  letter-spacing: 0.1em; text-transform: lowercase; white-space: nowrap; }
+#go-strip { flex: 1 1 auto; min-width: 0; display: flex; gap: 6px; overflow-x: auto;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+#go-strip::-webkit-scrollbar { display: none; }
+.go-chip { flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  background: rgba(255, 255, 255, 0.045); border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px; color: var(--dim); font: 12px var(--font); padding: 5px 11px;
+  cursor: pointer; white-space: nowrap; }
+.go-chip.on { border-color: var(--accent); color: #e8edf3;
+  background: rgba(156, 210, 255, 0.1); }
+.go-chip i { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 6px currentColor; }
+
+#go-eta { flex: 0 0 auto; border-bottom: 1px solid var(--hairline);
+  max-height: 42dvh; display: flex; flex-direction: column; }
+#go-eta-head { display: flex; align-items: baseline; gap: 6px; background: none; border: 0;
+  cursor: pointer; padding: 8px 14px 6px; text-align: left;
+  font: 600 10px var(--font); color: #8a949f; text-transform: uppercase; letter-spacing: 0.1em; }
+#go-eta-head i { font-style: normal; font-size: 9px; }
+#go-eta-head em { font-style: normal; color: #59636e; margin-left: auto; letter-spacing: 0; }
+#go-eta-body { overflow-y: auto; padding: 0 14px 10px; font-size: 13px; }
+#go-eta-body.closed { display: none; }
+#go-eta-body table, #go-eta-body pre { font-size: 12px; }
+.go-dim { color: var(--dim); }
+
+#go-chat-slot { flex: 1 1 auto; min-height: 0; position: relative; }
+#go-summon { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%);
+  z-index: 12; cursor: pointer; border: 1px solid rgba(244, 196, 48, 0.5); border-radius: 12px;
+  background: rgba(244, 196, 48, 0.12); color: #ffd75e; font: 600 15px var(--font);
+  padding: 14px 22px; }
+
+/* the ChatDock, re-plumbed: fills the slot, never slides, no desktop chrome */
+#chat-dock.go-mode {
+  position: absolute; inset: 0; width: 100%; transform: none !important;
+  border-right: 0; box-shadow: none; background: transparent;
+  transition: none; font-size: 15px;
+}
+#chat-dock.go-mode .cd-x { display: none; }              /* the page IS the chat */
+#chat-dock.go-mode .cd-feed { padding: 14px 12px 10px; }
+#chat-dock.go-mode .cd-compose { padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
+#chat-dock.go-mode .cd-input { font-size: 16px; }        /* 16px stops iOS zoom-on-focus */
+#chat-dock.go-mode .cd-menu { bottom: calc(64px + env(safe-area-inset-bottom)); }
+#chat-dock.go-mode .md pre { font-size: 11px; }

@@ -1,8 +1,9 @@
 // hive — a small command center for Claude Code sessions. One Bun process: static UI,
 // a /models endpoint, and one WebSocket per browser with topic fanout (hive board +
 // per-session chats). Run it where the agents should live; open it from anywhere.
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { cookieHeader, peek, verdict } from "./auth";
 import { buildUi, ROOT } from "./build";
 import { Hub } from "./hub";
 import { EFFORTS, type ClientOp, type ServerMsg } from "./proto";
@@ -19,29 +20,51 @@ const server = Bun.serve<WsData>({
   hostname: process.env.HIVE_BIND || "127.0.0.1",
   async fetch(req, srv) {
     const url = new URL(req.url);
+    // the token gate (HIVE_TOKEN): everything — pages, data, the socket — sits behind it
+    // when armed. ?key= once → a year-long cookie; deliberately no localhost bypass.
+    const v = verdict(peek(req), process.env.HIVE_TOKEN);
+    if (v === "deny") return new Response("hive: locked", { status: 401 });
+    const setCookie = v === "setCookie" ? { "Set-Cookie": cookieHeader(process.env.HIVE_TOKEN!) } : undefined;
+    const finish = (r: Response) => {
+      if (setCookie) r.headers.set("Set-Cookie", setCookie["Set-Cookie"]);
+      return r;
+    };
     if (url.pathname === "/ws") {
       return srv.upgrade(req, { data: { watching: new Set<string>() } })
         ? undefined
         : new Response("upgrade failed", { status: 400 });
     }
+    if (url.pathname === "/go") {
+      return finish(new Response(Bun.file(join(ROOT, "ui/go.html")), { headers: { "Cache-Control": "no-cache" } }));
+    }
+    if (url.pathname === "/eta") {
+      // what the eta duty writes for the user — served as data, rendered by the page
+      const p = process.env.HIVE_ETA_FILE || join(process.env.HOME || ".", "hive-eta.md");
+      try {
+        const st = statSync(p);
+        return finish(Response.json({ md: readFileSync(p, "utf8").slice(0, 20_000), mtime: Math.floor(st.mtimeMs / 1000) }));
+      } catch {
+        return finish(Response.json({ md: "", mtime: 0 }));
+      }
+    }
     // no-cache everywhere: a redeployed hive must never leave a browser holding a
     // stale bundle that quietly misrepresents the board
     const fresh = { "Cache-Control": "no-cache" };
     if (url.pathname === "/" || url.pathname === "/index.html") {
-      return new Response(Bun.file(join(ROOT, "ui/index.html")), { headers: fresh });
+      return finish(new Response(Bun.file(join(ROOT, "ui/index.html")), { headers: fresh }));
     }
     if (url.pathname === "/styles.css") {
-      return new Response(Bun.file(join(ROOT, "ui/styles.css")), { headers: fresh });
+      return finish(new Response(Bun.file(join(ROOT, "ui/styles.css")), { headers: fresh }));
     }
     if (url.pathname.startsWith("/dist/")) {
       const f = Bun.file(join(ROOT, "dist", url.pathname.slice(6)));
-      return (await f.exists()) ? new Response(f, { headers: fresh }) : new Response("not found", { status: 404 });
+      return finish((await f.exists()) ? new Response(f, { headers: fresh }) : new Response("not found", { status: 404 }));
     }
     if (url.pathname === "/models") {
       const d = hub.store.getDefaults();
-      return Response.json({ models: hub.modelChoices(), efforts: EFFORTS.map((e) => ({ value: e })), defaults: { model: d.model, effort: d.effort } });
+      return finish(Response.json({ models: hub.modelChoices(), efforts: EFFORTS.map((e) => ({ value: e })), defaults: { model: d.model, effort: d.effort } }));
     }
-    if (url.pathname === "/healthz") return Response.json({ ok: true, sessions: hub.sessions.size });
+    if (url.pathname === "/healthz") return finish(Response.json({ ok: true, sessions: hub.sessions.size }));
     if (url.pathname === "/perf" && req.method === "POST") {
       // the client's measured frame stats — the authoritative answer to "is it laggy",
       // logged AND kept in ~/.hive/perf.log so any machine's numbers can be read later
