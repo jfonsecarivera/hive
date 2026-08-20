@@ -10,10 +10,16 @@ const SID_A = "11111111-2222-3333-4444-555555555555";
 const SID_B = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const SID_C = "99999999-8888-7777-6666-555555555555";
 
+const SID_D = "44444444-3333-2222-1111-000000000000";
+
 function fixtureDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "hive-romp-"));
   mkdirSync(join(dir, "names"), { recursive: true });
   mkdirSync(join(dir, "sdk"), { recursive: true });
+  mkdirSync(join(dir, "archive"), { recursive: true });
+  // an archived session: named, but the user retired it on romp's dashboard
+  writeFileSync(join(dir, "names", SID_D), "old-work\t/home/user/dev/notes-api\t#4EA8A9\twhite\n");
+  writeFileSync(join(dir, "archive", SID_D + ".json"), JSON.stringify({ headline: "done long ago" }));
   writeFileSync(join(dir, "names", SID_A), "web\t/home/user/dev/notes-api\t#98998A\tblack\n");
   writeFileSync(join(dir, "sdk", SID_A + ".json"), JSON.stringify({
     sid: SID_A, name: "web", mode: "bypassPermissions", effort: "max", model: "fable", spawnedAt: 1700000000,
@@ -26,10 +32,11 @@ function fixtureDir(): string {
 }
 
 describe("readRompRegistry", () => {
-  test("parses names + sdk meta, maps fg words, indexes lastSid, skips junk", () => {
+  test("parses names + sdk meta, maps fg words, indexes lastSid, skips junk AND archived", () => {
     const reg = readRompRegistry(fixtureDir());
     expect(reg.size).toBe(3);                  // web (by sid AND by lastSid) + api
     expect(reg.get("12121212-3434-5656-7878-909090909090")?.name).toBe("web");
+    expect(reg.has(SID_D)).toBe(false);        // romp archived it — the mirror stays quiet
     const a = reg.get(SID_A)!;
     expect(a).toEqual({
       id: SID_A, ids: [SID_A, "12121212-3434-5656-7878-909090909090"],
