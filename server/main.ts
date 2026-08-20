@@ -51,6 +51,15 @@ const server = Bun.serve<WsData>({
     // stale bundle that quietly misrepresents the board
     const fresh = { "Cache-Control": "no-cache" };
     if (url.pathname === "/" || url.pathname === "/index.html") {
+      // one URL, right page per device: a phone at the root gets the pocket view
+      // (the WebGL board + desktop dock read as a mess on 390px); /board forces desktop
+      const ua = req.headers.get("user-agent") || "";
+      if (/iPhone|Android.*Mobile|Mobile.*Safari/i.test(ua)) {
+        return finish(new Response(null, { status: 302, headers: { Location: "/go" + url.search } }));
+      }
+      return finish(new Response(Bun.file(join(ROOT, "ui/index.html")), { headers: fresh }));
+    }
+    if (url.pathname === "/board") {
       return finish(new Response(Bun.file(join(ROOT, "ui/index.html")), { headers: fresh }));
     }
     if (url.pathname === "/styles.css") {

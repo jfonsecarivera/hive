@@ -14,7 +14,7 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { delegate } from "./actions";
 import { assignSlots, axialToXZ, frameDt, frameRadius, HEX_SIZE, hexCorner, hexDistance, latticeSegments, PAD_R, PAD_THETA, RIM_THETA, ringOf, slotOfAxial, spiralSlot, xzToAxial } from "./hive-layout";
 import { diffSessions, finishedLine, foldEnding, foldSeenAsk, foldSeenDone, hiveAge, isFaded, isKnownState, stateLine, type HiveSession, type SeenDone } from "./hive-model";
-import { backOut, cycleBeat, popOut, springStep } from "./motion";
+import { backOut, cycleBeat, popOut, springVel } from "./motion";
 import type { ClientOp, Defaults, ModelChoice, ShelfItem } from "../server/proto";
 
 // what the world needs from the page around it — the whole outside contract
@@ -95,23 +95,41 @@ class Pad {
   private carryTarget: THREE.Vector3 | null = null;
   private carryWant = new THREE.Vector3(); // scratch — no per-frame allocation
   private homeX = 0; private homeZ = 0;    // the pad's cell — eased toward, so a re-home GLIDES
-  lift = 0;                                 // hover/press target offset, eased in update()
+  lift = 0;                                 // hover/press target — a SPRING chases it (jelly)
   hover = false;                            // under the pointer: the selector ring answers
   portrait = false;                         // the close-up subject: face the viewer
   private liftCur = 0;
+  private liftV = 0;                        // lift spring velocity
+  private carryV = 0;                       // carrier-scale spring velocity
+  private wasCarried = false;               // release → touchdown thump when the spring lands
+  private prevCarry = new THREE.Vector3();  // last carrier pos — dangle velocity, no allocation
   private selMat: THREE.LineBasicMaterial;  // the Switch-style accent selector outline
   private sel: THREE.LineLoop;
   private ringColor = new THREE.Color(ST.ready);
   private ringTarget = new THREE.Color(ST.ready);
+  private pulse: THREE.LineLoop;            // one-shot "state landed" ring ping
+  private pulseMat: THREE.LineBasicMaterial;
+  private pulseT = -1;                      // ≥0 → playing
+  private pulseColor = new THREE.Color(0xffffff);
   private t = Math.random() * 100;          // free-running clock, de-synced per pad
   private spawnT = 0;                       // 0→1 arrival pop
+  private spawnDelay: number;               // first-payload ripple: outer rings wait a beat
+  private popped = false;                   // consumed by the world → spawn dust
+  private sankMark = false;                 // departure: submerged below the floor
+  private sankPuff = false;                 // consumed by the world → sink dust
+  private bangBase: THREE.Vector3;          // note-sprite rest scales (pop-ins multiply them)
+  private tickBase: THREE.Vector3;
+  private questBase: THREE.Vector3;
+  private bangIn = 1; private tickIn = 1; private questIn = 1;   // 0→1 pop-in clocks
   dyingT = -1;                              // ≥0 → departure animation clock
   sess: HiveSession;
 
   private fadedCur = false;                 // dozing, derived per frame from lastT
 
-  constructor(sess: HiveSession, slot: number) {
+  constructor(sess: HiveSession, slot: number, spawnDelay = 0) {
     this.sess = sess;
+    this.spawnDelay = spawnDelay;
+    this.popped = spawnDelay <= 0;           // the world answers the pop with a dust ring
     const { x, z } = axialToXZ(spiralSlot(slot), HEX_SIZE);
     this.group.position.set(x, 0, z);
     this.homeX = x; this.homeZ = z;
@@ -164,6 +182,16 @@ class Pad {
     this.sel.position.y = PAD_H + 0.03;
     this.group.add(this.sel);
 
+    // the state-change PING: one expanding, fading copy of the boundary line in the NEW
+    // state's color — a diff event's punctuation mark, never a standing glow
+    this.pulseMat = new THREE.LineBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    this.pulse = new THREE.LineLoop(hexLineGeo(PAD_R), this.pulseMat);
+    this.pulse.position.y = PAD_H + 0.012;
+    this.group.add(this.pulse);
+
     this.labelMesh = makeNameDecal(sess.name, sess.color?.bg || "#cccccc");
     this.labelMesh.position.z = LABEL_FRONT;
     this.labelYaw.position.y = PAD_H + 0.02;
@@ -190,6 +218,10 @@ class Pad {
     this.quest.position.y = 2.05;
     this.quest.visible = false;
     this.group.add(this.quest);
+    // rest scales, captured once: the pop-in clocks scale these, never compound them
+    this.bangBase = this.bang.scale.clone();
+    this.tickBase = this.tick.scale.clone();
+    this.questBase = this.quest.scale.clone();
 
     this.guy = new Dweller(sess.color?.bg || "#9cd2ff");
     this.guy.group.position.y = PAD_H;
@@ -236,6 +268,9 @@ class Pad {
     if (stateChanged) {
       this.ringTarget.setHex(stColor(sess.state));
       this.guy.setState(this.guyState(), this.fadedCur);
+      // the arriving state's punctuation: one ring ping in its color
+      this.pulseT = 0;
+      this.pulseColor.setHex(stColor(sess.state));
     }
     if (sess.name !== prevName || sess.color?.bg !== prevColor) {
       this.labelYaw.remove(this.labelMesh);
@@ -251,6 +286,26 @@ class Pad {
 
   pokeBean() { this.guy.poke(); }
   wave() { this.guy.greet(); }
+  // a goal completed: the bean jumps for joy, the cell rings gold
+  cheer() {
+    this.guy.cheer();
+    this.pulseT = 0;
+    this.pulseColor.setHex(0xffd700);
+  }
+  notice() { this.guy.perk(); }              // hover found them — eyes widen for a beat
+  pickUp() { this.guy.setCarried("held"); }
+  putDown() { this.guy.setCarried("no"); }
+  setScared(s: boolean) { this.guy.setCarried(s ? "scared" : "held"); }
+  // a real touchdown happened this frame → where the dust puff belongs (else null)
+  consumeLanding(): THREE.Vector3 | null {
+    if (!this.guy.landed) return null;
+    this.guy.landed = false;
+    const p = this.carrier.getWorldPosition(new THREE.Vector3());
+    p.y = this.group.position.y + PAD_H + 0.05;
+    return p;
+  }
+  consumePop(): boolean { const p = this.popped; this.popped = false; return p; }
+  consumeSink(): boolean { const p = this.sankPuff; this.sankPuff = false; return p; }
 
   // the nameplate is a click target (board rename) only when actually readable — an
   // invisible plate must never be a secret button, and hover already fades it in
@@ -270,6 +325,7 @@ class Pad {
     this.guy.group.visible = false;
     this.carrier.position.set(0, 0, 0);
     this.carryTarget = null;
+    this.wasCarried = false;                 // no touchdown thump for a bean that burst
   }
 
   update(dt: number, camYaw: number, camDist: number, focus: boolean): boolean {
@@ -280,23 +336,48 @@ class Pad {
     this.labelYaw.rotation.y = camYaw;
     const lmat = this.labelMesh.material as THREE.MeshBasicMaterial;
     lmat.opacity = ease(lmat.opacity, focus ? 1 : Math.min(1, Math.max(0, (42 - camDist) / 12)), dt, 10);
-    if (this.spawnT < 1) {
-      this.spawnT = Math.min(1, this.spawnT + dt / 0.5);
-      const s = this.spawnT;
-      const overshoot = 1 + 0.28 * Math.sin(s * Math.PI) * (1 - s);   // pop past 1, settle back
-      this.group.scale.setScalar(Math.max(0.001, s * overshoot));
-    }
     if (this.dyingT >= 0) {
-      // departure: a small farewell hop, then sink through the floor and fade
+      // departure in three beats — a crouch (anticipation), the farewell hop (the bean
+      // waves on the way), then sinking through the floor with a last dust settle.
+      // A trash drop starts at the sink (the burst already said everything).
       this.dyingT += dt;
       const d = this.dyingT;
-      this.group.position.y = d < 0.25 ? Math.sin(d / 0.25 * Math.PI) * 0.3 : -(d - 0.25) * 2.2;
-      const sc = Math.max(0.001, 1 - Math.max(0, d - 0.25) * 1.1);
-      this.group.scale.setScalar(sc);
+      if (d < 0.14) {
+        const k = d / 0.14;
+        this.group.scale.set(1 + 0.07 * k, 1 - 0.14 * k, 1 + 0.07 * k);
+        this.group.position.y = -0.02 * k;
+      } else if (d < 0.52) {
+        const k = (d - 0.14) / 0.38;
+        this.group.position.y = Math.sin(k * Math.PI) * 0.45;
+        const st = 1 + 0.12 * Math.sin(k * Math.PI);
+        const w = 1 / Math.sqrt(st);         // stretch in the air, volume-ish preserved
+        this.group.scale.set(w, st, w);
+      } else {
+        const k = d - 0.52;
+        this.group.position.y = -k * 2.4;
+        this.group.scale.setScalar(Math.max(0.001, 1 - k * 1.5));
+        if (!this.sankMark && this.group.position.y < -0.3) { this.sankMark = true; this.sankPuff = true; }
+      }
+      this.guy.update(dt, this.t, camYaw);   // the farewell wave plays on the way down
       return d > 1.15;                      // done → caller disposes
     }
-    this.liftCur = ease(this.liftCur, this.lift, dt, 14);
-    this.group.position.y = this.liftCur;
+    if (this.spawnDelay > 0) {
+      // the first payload's arrival ripple: outer rings hold a beat, so the board
+      // builds outward like dominoes instead of appearing all at once
+      this.spawnDelay -= dt;
+      if (this.spawnDelay <= 0) this.popped = true;
+      this.group.scale.setScalar(0.001);
+      return false;
+    }
+    if (this.spawnT < 1) {
+      this.spawnT = Math.min(1, this.spawnT + dt / 0.55);
+      this.group.scale.setScalar(Math.max(0.001, popOut(this.spawnT)));
+    }
+    // the hover lift is a SPRING, not an ease: rise with one soft bounce, settle
+    this.liftV = springVel(this.liftCur, this.liftV, this.lift, dt, 16, 0.6);
+    this.liftCur += this.liftV * dt;
+    this.group.position.y = this.liftCur
+      + (this.spawnT < 1 ? -0.3 * (1 - this.spawnT) * (1 - this.spawnT) : 0);   // …rising out of the board
     // the tile glides to its home cell (a re-home moves it; at rest this is a no-op)
     this.group.position.x = ease(this.group.position.x, this.homeX, dt, 10);
     this.group.position.z = ease(this.group.position.z, this.homeZ, dt, 10);
@@ -306,10 +387,22 @@ class Pad {
     if (this.carryTarget) this.carryWant.copy(this.carryTarget).sub(this.group.position);
     else this.carryWant.set(0, 0, 0);
     this.carrier.position.lerp(this.carryWant, 1 - Math.exp(-30 * dt));   // tight to the hand
-    // juice: carried beans grow a size, hovered beans lean in a touch
+    if (this.carryTarget) {
+      // dangle: the hand's velocity, in the bean's camera-facing frame — feet trail the motion
+      const vx = (this.carrier.position.x - this.prevCarry.x) / dt;
+      const vz = (this.carrier.position.z - this.prevCarry.z) / dt;
+      this.guy.carryLean(vx * Math.cos(camYaw) - vz * Math.sin(camYaw),
+        vx * Math.sin(camYaw) + vz * Math.cos(camYaw), dt);
+      this.wasCarried = true;
+    } else if (this.wasCarried && this.carrier.position.lengthSq() < 0.02) {
+      this.wasCarried = false;
+      this.guy.thump();                      // touchdown — squash now, dust from the world
+    }
+    this.prevCarry.copy(this.carrier.position);
+    // juice: carried beans grow a size, hovered beans lean in a touch — on a jelly spring
     const cs = this.carryTarget ? 1.12 : this.hover ? 1.05 : 1;
-    this.carrier.scale.x = ease(this.carrier.scale.x, cs, dt, 12);
-    this.carrier.scale.y = this.carrier.scale.z = this.carrier.scale.x;
+    this.carryV = springVel(this.carrier.scale.x, this.carryV, cs, dt, 15, 0.5);
+    this.carrier.scale.setScalar(Math.max(0.05, this.carrier.scale.x + this.carryV * dt));
     // the selector: a gentle pulse under the pointer, a steady presence on the portrait
     const selTarget = this.hover ? 0.42 + 0.22 * (0.5 + 0.5 * Math.sin(this.t * 4.6))
       : this.portrait ? 0.3 : 0;
@@ -326,26 +419,59 @@ class Pad {
     else if (st === "retrying") this.ringMat.opacity = 0.5 + 0.5 * (Math.sin(this.t * 11) > 0.2 ? 1 : 0.35);
     else this.ringMat.opacity = 0.95;
 
+    // the state-change ping: one swell-and-fade of the boundary in the new state's color
+    if (this.pulseT >= 0) {
+      this.pulseT += dt;
+      const p = this.pulseT / 0.55;
+      if (p >= 1) { this.pulseT = -1; this.pulseMat.opacity = 0; }
+      else {
+        this.pulse.scale.setScalar(1 + p * 0.5);
+        this.pulseMat.opacity = (1 - p) * (1 - p) * 0.7;
+        this.pulseMat.color.copy(this.pulseColor).multiplyScalar(1.6);
+      }
+    }
+
     if (st === "awaiting" && !this.askAck) {
       // the SHOUT — sonar ping (1.4s loop, ring swells ~1.8× and fades, visible from any
-      // zoom) + the bobbing ❗ — is for needs-you the user hasn't seen. Once looked at,
-      // the red ring alone carries the standing fact.
+      // zoom) + the bobbing, wiggling ❗ — is for needs-you the user hasn't seen. Once
+      // looked at, the red ring alone carries the standing fact.
       const p = (this.t % 1.4) / 1.4;
       this.sonarMat.opacity = (1 - p) * 0.5;
       this.sonar.scale.setScalar(1 + p * 0.85);
-      this.bang.visible = true;
+      if (!this.bang.visible) { this.bang.visible = true; this.bangIn = 0; }
+      this.bangIn = Math.min(1, this.bangIn + dt / 0.3);
+      const bk = backOut(this.bangIn);
+      this.bang.scale.set(this.bangBase.x * bk, this.bangBase.y * bk, 1);
+      (this.bang.material as THREE.SpriteMaterial).rotation = 0.12 * Math.sin(this.t * 8.5);
       this.bang.position.y = 2.05 + 0.14 * Math.abs(Math.sin(this.t * 5));
     } else {
       this.sonarMat.opacity = 0;
       this.bang.visible = false;
     }
     // the finished note holds only over a READY pad: a new turn hides it (working again),
-    // needs-you replaces it (the bang), and the user's own click retires it for good
-    this.tick.visible = st === "ready" && this.unseenDone;
-    if (this.tick.visible) this.tick.position.y = 2.05 + 0.07 * Math.sin(this.t * 2.1);
+    // needs-you replaces it (the bang), and the user's own click retires it for good.
+    // It POPS in (news!) and then sways gently (a fact).
+    const tickOn = st === "ready" && this.unseenDone;
+    if (tickOn && !this.tick.visible) { this.tick.visible = true; this.tickIn = 0; }
+    if (!tickOn) this.tick.visible = false;
+    if (this.tick.visible) {
+      this.tickIn = Math.min(1, this.tickIn + dt / 0.32);
+      const tk = backOut(this.tickIn);
+      this.tick.scale.set(this.tickBase.x * tk, this.tickBase.y * tk, 1);
+      (this.tick.material as THREE.SpriteMaterial).rotation = 0.07 * Math.sin(this.t * 2.1);
+      this.tick.position.y = 2.05 + 0.07 * Math.sin(this.t * 2.1);
+    }
     // the unknown-state note: quiet, steady — the ? is a fact, not a shout
-    this.quest.visible = !isKnownState(st);
-    if (this.quest.visible) this.quest.position.y = 2.05 + 0.05 * Math.sin(this.t * 1.6);
+    const qOn = !isKnownState(st);
+    if (qOn && !this.quest.visible) { this.quest.visible = true; this.questIn = 0; }
+    if (!qOn) this.quest.visible = false;
+    if (this.quest.visible) {
+      this.questIn = Math.min(1, this.questIn + dt / 0.35);
+      const qk = backOut(this.questIn);
+      this.quest.scale.set(this.questBase.x * qk, this.questBase.y * qk, 1);
+      (this.quest.material as THREE.SpriteMaterial).rotation = 0.1 * Math.sin(this.t * 1.1);
+      this.quest.position.y = 2.05 + 0.05 * Math.sin(this.t * 1.6);
+    }
     // dozing derives from lastT right here, per frame — the bean nods off (and wakes)
     // the moment its own clock crosses the line, no push or timer involved
     const faded = isFaded(this.sess, Date.now() / 1000);
@@ -353,6 +479,8 @@ class Pad {
       this.fadedCur = faded;
       this.guy.setState(this.guyState(), faded);
     }
+    // pride is the ✓ note worn in the body: unseen finished work, and not yet dozed off
+    this.guy.proud = st === "ready" && this.unseenDone && !this.fadedCur;
     this.guy.update(dt, this.t, camYaw);
     // the portrait subject looks at YOU — whatever its pose, the face finds the camera
     if (this.portrait) this.guy.group.rotation.y = camYaw;
@@ -571,14 +699,18 @@ class Dweller {
 
   update(dt: number, t: number, camYaw: number) {
     const s = this.state;
-    // blink (life for every state except the egg)
+    // blink bookkeeping (life for every state except the egg) — the eyes are APPLIED at
+    // the end, once the pose has decided how they feel (wide, happy-squint, mid-blink)
     if (s !== "opening") {
       this.blinkAt -= dt;
-      if (this.blinkAt <= 0) { this.blinkT = 0.12; this.blinkAt = 3 + Math.random() * 4; }
+      if (this.blinkAt <= 0) {
+        this.blinkT = 0.12;
+        // sometimes a quick double-blink — small creatures do
+        this.blinkAt = Math.random() < 0.25 ? 0.24 : 3 + Math.random() * 4;
+      }
       if (this.blinkT > 0) this.blinkT -= dt;
-      const bl = this.blinkT > 0 ? 0.12 : 1;
-      this.eyeL.scale.set(1, bl, 1); this.eyeR.scale.set(1, bl, 1);
     }
+    if (this.perkT > 0) this.perkT -= dt;
 
     let y = 0, rotX = 0, rotZ = 0, yaw = 0, sx = 0;
     let aura = 0, desk = false;
@@ -587,37 +719,52 @@ class Dweller {
     switch (s) {
       case "working": {
         desk = true;
-        rotX = 0.1;
         this.bodyMat.emissiveIntensity = 0.3;   // the screen lights the bean up a touch
-        // hands over the keys, tapping in bursts; the screen glow flickers with the keys
-        const burst = Math.sin(t * 2.8 + this.phase) > -0.35;
-        armLX = -1.15 + (burst ? 0.18 * Math.sin(t * 13) : 0);
-        armRX = -1.15 + (burst ? 0.18 * Math.sin(t * 13 + Math.PI) : 0);
-        armLZ = 0.12; armRZ = -0.12;
+        // hands over the keys, tapping in bursts, head nodding to the work — and every
+        // ~14s a little arms-overhead stretch break (anyone typing that long earns one)
+        const stretch = cycleBeat(t + this.phase * 2.2, 14, 1.3);
+        const burst = stretch < 0.02 && Math.sin(t * 2.8 + this.phase) > -0.35;
+        armLX = (-1.15 + (burst ? 0.18 * Math.sin(t * 13) : 0)) * (1 - stretch);
+        armRX = (-1.15 + (burst ? 0.18 * Math.sin(t * 13 + Math.PI) : 0)) * (1 - stretch);
+        armLZ = 0.12 + 2.2 * stretch; armRZ = -0.12 - 2.2 * stretch;
+        rotX = 0.1 - 0.34 * stretch + 0.02 * Math.sin(t * 5.6) * (1 - stretch);
         this.screenMat.emissiveIntensity = 0.75 + (burst ? 0.3 * Math.abs(Math.sin(t * 9)) : 0.1);
         break;
       }
       case "awaiting": {                     // they need YOU: face the camera, big both-arms wave
         yaw = camYaw;
+        rotX = 0.05;                         // an eager little lean toward you
         y = 0.22 * Math.abs(Math.sin(t * 4.6));
         armLZ = 2.5 + 0.4 * Math.sin(t * 9);
         armRZ = -2.5 - 0.4 * Math.sin(t * 9 + 1);
         break;
       }
-      case "blocked":
+      case "blocked": {
         desk = true;                          // the wreck stays on the desk, screen dead, smoking
         this.screenMat.emissiveIntensity = 0.04;
         rotX = 0.55; y = -0.05;              // folded forward over it, arms hanging dead
         armLZ = 0.05; armRZ = -0.05; armLX = -0.4; armRX = -0.4;
+        // now and then, one slow, weary pound on the dead machine
+        const pound = cycleBeat(t + this.phase * 3, 4.6, 0.55);
+        armRX = -0.4 - 1.1 * pound;
+        rotX = 0.55 + 0.07 * pound;
         break;
-      case "retrying":
+      }
+      case "retrying": {
         sx = 0.34 * Math.sin(t * 1.6);       // pacing the pad, arms swinging with the waddle
-        yaw = Math.cos(t * 1.6) > 0 ? Math.PI / 2 : -Math.PI / 2;
+        // the turnarounds SKID: heading eases through the flip with a squash beat
+        const dir = Math.cos(t * 1.6) > 0 ? 1 : -1;
+        if (dir !== this.paceDir) { this.paceDir = dir; this.squash = Math.max(this.squash, 1.16); }
+        this.paceYaw += (dir * Math.PI / 2 - this.paceYaw) * (1 - Math.exp(-9 * dt));
+        yaw = this.paceYaw;
         rotZ = 0.08 * Math.sin(t * 7);
+        y = 0.03 * Math.abs(Math.sin(t * 7));   // tiny waddle hops
         armLX = 0.5 * Math.sin(t * 7); armRX = -0.5 * Math.sin(t * 7);
         break;
+      }
       case "awaitingBg":
-        rotX = -0.14;                        // leaning back, watching its dispatched work spin
+        // leaning back, watching its dispatched work spin — the head rides the gem's bob
+        rotX = -0.14 + 0.035 * Math.sin(t * 2.6);
         armLZ = 0.9; armRZ = -0.9;
         this.orbMat.opacity = 0.9;
         this.orb.rotation.y = t * 2.2; this.orb.rotation.x = 0.5;
@@ -631,33 +778,82 @@ class Dweller {
         this.aura.rotation.z = t * 2.2;
         break;
       case "interrupting":
-        this.squash = Math.max(this.squash, 1.12);   // freeze-frame squash; no motion at all
+        this.squash = Math.max(this.squash, 1.12);   // the screech-stop: a squash + a shiver
+        rotZ = 0.02 * Math.sin(t * 34);
         break;
-      case "opening":
-        // the egg: eyes hidden, face hidden, wobbling toward the hatch
+      case "opening": {
+        // the egg: eyes hidden, face hidden — and something in there is TRYING:
+        // wobble-wobble… rest (anticipation bursts, not a metronome)
         this.eyeL.scale.setScalar(0.001); this.eyeR.scale.setScalar(0.001);
         this.face.visible = false; this.armL.visible = false; this.armR.visible = false;
         this.bodyMat.color.lerp(new THREE.Color(0xf2ead9), 0.2);
-        rotZ = 0.09 * Math.sin(t * 9);
+        const w = cycleBeat(t + this.phase, 2.4, 0.8);
+        rotZ = 0.15 * Math.sin(t * 17) * w;
+        y = 0.02 * Math.abs(Math.sin(t * 17)) * w;
         break;
+      }
       default:                               // ready — and any state hive doesn't know
-        if (this.faded && s === "ready") { rotX = -0.32; y = -0.06; armLZ = 0.1; armRZ = -0.1; }   // dozing
-        else if (s !== "ready") {
-          // unknown state: an honest, curious idle — slow look-arounds, no claims
+        if (this.faded && s === "ready") {
+          // dozing: the classic nod-off — the head sinks… sinks… and catches itself
+          const nod = (t + this.phase * 4) % 7;
+          const sink = nod < 5.2 ? nod / 5.2 : Math.max(0, 1 - (nod - 5.2) / 0.45);
+          rotX = -0.18 - 0.2 * sink;
+          y = -0.06; armLZ = 0.1; armRZ = -0.1;
+        } else if (s !== "ready") {
+          // unknown state: an honest, curious idle — slow look-arounds, a head tilt, no claims
           yaw = 0.4 * Math.sin(t * 0.7 + this.phase);
+          rotZ = 0.1 * Math.sin(t * 0.9 + this.phase);
           armLZ = 0.5; armRZ = -0.5;
+        } else if (this.proud) {
+          // finished work on display: hands on hips, and every few seconds a happy hop
+          rotX = -0.1;
+          armLZ = 1.15; armRZ = -1.15; armLX = 0.5; armRX = 0.5;
+          const hop = cycleBeat(t + this.phase, 2.9, 0.42);
+          y = 0.26 * hop;
+          armLZ += 1.5 * hop; armRZ -= 1.5 * hop;
         } else {
           rotZ = 0.03 * Math.sin(t * 1.3 + this.phase);
-          armLZ = 0.35 + 0.06 * Math.sin(t * 1.3 + this.phase);
-          armRZ = -0.35 - 0.06 * Math.sin(t * 1.3 + this.phase);
+          const k = cycleBeat(t + this.phase * 3, 12, 1.0);   // an idle stretch, now and then
+          rotX = -0.2 * k;
+          armLZ = 0.35 + 0.06 * Math.sin(t * 1.3 + this.phase) + 2.0 * k;
+          armRZ = -0.35 - 0.06 * Math.sin(t * 1.3 + this.phase) - 2.0 * k;
         }
     }
-    // the greeting outranks the pose's right arm for its moment — a clear, happy wave
+    // the CHEER (a goal completed) outranks the pose: they turn to you and jump for joy
+    if (this.cheerT > 0) {
+      this.cheerT -= dt;
+      const ct = 1.2 - this.cheerT;
+      yaw = camYaw; sx = 0; rotX = 0;
+      rotZ = 0.05 * Math.sin(t * 12);
+      y = ct < 0.36 ? 0.42 * Math.sin((ct / 0.36) * Math.PI)
+        : ct >= 0.46 && ct < 0.78 ? 0.26 * Math.sin(((ct - 0.46) / 0.32) * Math.PI) : 0;
+      armLZ = 2.5 + 0.3 * Math.sin(t * 13); armRZ = -2.5 - 0.3 * Math.sin(t * 13 + 1);
+      armLX = armRX = 0;
+    }
+    // the greeting outranks the pose's right arm for its moment — a hop hello + a wave
     if (this.greetT > 0) {
       this.greetT -= dt;
-      const g = Math.min(1, (0.9 - this.greetT) * 6);   // raise fast, wave, lower with the clock
+      const gAge = 0.9 - this.greetT;
+      if (gAge < 0.22) y += 0.16 * Math.sin((gAge / 0.22) * Math.PI);
+      const g = Math.min(1, gAge * 6);       // raise fast, wave, lower with the clock
       armRZ = -2.3 * g - 0.5 * Math.sin(t * 11) * g;
       armRX = 0;
+    }
+    // carried outranks everything: they hang from your hand, facing you, feet trailing
+    // the motion — and held over the trash they KNOW: arms clamped up, trembling
+    if (this.carried !== "no") {
+      yaw = camYaw; y = 0; sx = 0;
+      rotX = this.leanX; rotZ = this.leanZ;
+      if (this.carried === "held") {
+        armLZ = 2.2 + 0.28 * Math.sin(t * 7.5); armRZ = -2.2 - 0.28 * Math.sin(t * 7.5 + 0.9);
+      } else {
+        armLZ = 2.85 + 0.05 * Math.sin(t * 42); armRZ = -2.85 + 0.05 * Math.sin(t * 42 + 2);
+        rotZ += 0.03 * Math.sin(t * 38);
+      }
+      armLX = armRX = 0;
+    } else {
+      this.leanX = ease(this.leanX, 0, dt, 10);
+      this.leanZ = ease(this.leanZ, 0, dt, 10);
     }
     if (s !== "opening") { this.face.visible = true; this.armL.visible = true; this.armR.visible = true; }
     if (s !== "working") this.bodyMat.emissiveIntensity = 0.22;
@@ -665,14 +861,18 @@ class Dweller {
     this.desk.visible = desk;
 
     // squash & stretch: landings compress the bean, air time stretches it — scale about the
-    // feet (the lathe sits on y=0, so plain scale already pivots there), volume-ish preserved
+    // feet (the lathe sits on y=0, so plain scale already pivots there), volume-ish preserved.
+    // A real touchdown also raises the landed FLAG the world answers with a dust puff.
     const vy = (y - this.prevY) / Math.max(dt, 1e-4);
     this.prevY = y;
-    if (y < 0.02 && vy < -0.6) this.squash = Math.max(this.squash, 1.22);
+    if (y < 0.02 && vy < -0.6) { this.squash = Math.max(this.squash, 1.22); this.landed = true; }
     this.squash = ease(this.squash, 1, dt, 9);
     const airStretch = Math.min(0.12, Math.max(0, vy * 0.03));
     const syn = (1 / this.squash) + airStretch;
-    const breathe = 1 + 0.018 * Math.sin(t * 2.1 + this.phase);
+    // dozing breathes slower and deeper — you can SEE the nap from orbit
+    const breathe = this.faded && s === "ready"
+      ? 1 + 0.045 * Math.sin(t * 1.05 + this.phase)
+      : 1 + 0.018 * Math.sin(t * 2.1 + this.phase);
     let bs = syn * breathe;
     if (this.pop > 0) {
       this.pop = Math.max(0, this.pop - dt);
@@ -680,6 +880,17 @@ class Dweller {
       bs *= 1 + 0.3 * Math.sin(p * Math.PI);
     }
     this.torso.scale.set(this.squash * (2 - breathe), bs, this.squash * (2 - breathe));
+
+    // eyes last: how they FEEL rides on top of what they're doing
+    if (s !== "opening") {
+      let ex = 1, ey = 1;
+      const happy = this.cheerT > 0 || this.greetT > 0.2 || this.pop > 0.2;
+      if (this.carried === "scared") { ex = 1.28; ey = 1.35; }     // wide-eyed
+      else if (happy) { ex = 1.2; ey = 0.42; }                     // the squint-smile
+      else if (this.perkT > 0) { ex = 1.12; ey = 1.18; }           // noticed you
+      if (this.blinkT > 0) ey = 0.1;
+      this.eyeL.scale.set(ex, ey, 1); this.eyeR.scale.set(ex, ey, 1);
+    }
 
     this.armL.rotation.set(armLX, 0, armLZ);
     this.armR.rotation.set(armRX, 0, armRZ);
@@ -1356,6 +1567,7 @@ export class HiveWorld {
     // pinned under the cursor no matter how the camera eases; the event only arms the dock
     this.dragSession = { sid, over: false };
     pad.lift = 0;
+    pad.pickUp();                            // arms up, a little stretch — they're in your hand
     const label = this.trashEl.querySelector(".ht-label") as HTMLElement;
     label.textContent = "Drop to end " + pad.sess.name;
     this.trashEl.classList.add("show");
@@ -1368,7 +1580,11 @@ export class HiveWorld {
     if (!pad || pad.dyingT >= 0) { this.dropSessionDrag(false, true); return; }
     const r = this.trashEl.getBoundingClientRect();
     const over = e.clientX >= r.left - 14 && e.clientX <= r.right + 14 && e.clientY >= r.top - 14;
-    if (over !== d.over) { d.over = over; this.trashEl.classList.toggle("armed", over); }
+    if (over !== d.over) {
+      d.over = over;
+      this.trashEl.classList.toggle("armed", over);
+      pad.setScared(over);                   // held over the trash, they KNOW
+    }
   }
 
   private dropSessionDrag(over: boolean, cancel = false) {
@@ -1379,6 +1595,7 @@ export class HiveWorld {
     if (!d) return;
     const pad = this.pads.get(d.sid);
     if (!pad) return;
+    pad.putDown();                           // whatever happens next, the hand let go
     if (over && pad.dyingT < 0) {
       // the drop is the decision: end the session. The bean bursts where it vanished, and
       // the tile goes straight to the sink — the farewell hop is for natural exits. The
@@ -1388,7 +1605,7 @@ export class HiveWorld {
       this.endingSids.set(d.sid, Date.now());
       this.particles.burst(pad.beanWorldPos().setY(1.0), [0xe5484d, 0x8a8a8a, 0xffb3b6], 26, 2.6);
       pad.consumeBean();
-      pad.dyingT = 0.26;
+      pad.dyingT = 0.52;                     // straight to the sink — no hop after a burst
       this.rayDirty = true;
       if (this.selected === d.sid) this.deselect();
       if (this.portraitSid === d.sid) this.exitPortrait();
@@ -1598,7 +1815,10 @@ export class HiveWorld {
 
   exitPortrait() {
     const pad = this.portraitSid && this.pads.get(this.portraitSid);
-    if (pad) pad.portrait = false;
+    if (pad) {
+      pad.portrait = false;
+      if (pad.dyingT < 0) pad.wave();        // …bye! — they see you leave, too
+    }
     if (this.portraitSid === null) return;
     this.portraitSid = null;
     this.frameAll();
@@ -1717,14 +1937,19 @@ export class HiveWorld {
 
     for (const sid of diff.removed) {
       const pad = this.pads.get(sid);
-      if (pad && pad.dyingT < 0) { pad.dyingT = 0; this.rayDirty = true; }   // departure plays; disposal in the loop
+      // departure plays (crouch, a waving hop, the sink); disposal in the loop
+      if (pad && pad.dyingT < 0) { pad.dyingT = 0; pad.wave(); this.rayDirty = true; }
       if (this.selected === sid) { this.card.gone(); this.selected = null; this.frameAll(); }
       if (this.portraitSid === sid) this.exitPortrait();
       if (this.hovered === sid) this.hovered = null;
     }
     for (const sid of diff.added) {
       const s = bySid.get(sid)!;
-      const pad = new Pad(s, this.slots.get(sid) ?? 0);
+      const slot = this.slots.get(sid) ?? 0;
+      // the FIRST payload pops in as a ripple, ring by ring outward — dominoes, not a
+      // curtain-up; later arrivals pop the moment they land
+      const delay = first ? Math.min(0.55, ringOf(slot) * 0.09 + (slot % 6) * 0.015) : 0;
+      const pad = new Pad(s, slot, delay);
       this.pads.set(sid, pad);
       this.scene.add(pad.group);
       this.rayDirty = true;
@@ -1743,6 +1968,17 @@ export class HiveWorld {
         pad.wave();
       }
       if (this.selected === s.sid) this.card.refresh(s, nowS);
+    }
+    // HATCHED: the egg gave way to a live session — eggshell sparkle in the newborn's
+    // color, and their first act is a wave at you
+    for (const c of diff.stateChanged) {
+      if (c.from !== "opening" || c.to === "opening") continue;
+      const pad = this.pads.get(c.sid);
+      if (!pad || pad.dyingT >= 0) continue;
+      const tint = new THREE.Color(pad.sess.color?.bg || "#9cd2ff").getHex();
+      const at = pad.group.position.clone().setY(PAD_H + 0.9);
+      this.particles.burst(at, [0xf2ead9, 0xfff3c4, tint], 24, 2.4);
+      pad.wave();
     }
     // the unseen-finished latch: completions the user hasn't gone to look at wear the ✓
     // note until their own gesture clears it (lookedAt). The open card IS looking.
@@ -1779,6 +2015,7 @@ export class HiveWorld {
         const tint = new THREE.Color(pad.sess.color?.bg || "#9cd2ff").getHex();
         // no pure white in the mix — additive + bloom turns white into a supernova
         this.particles.burst(at, [tint, ACCENT, 0xffd700, tint], 48, 4.2);
+        pad.cheer();                         // and the bean jumps for joy under it
       }
     }
     // the ghost's PARK is the first FREE slot — the natural "next" cell of the spiral; it
@@ -1917,7 +2154,7 @@ export class HiveWorld {
       if (old) { old.lift = 0; old.hover = false; }
       this.hovered = sid;
       const nw = sid ? this.pads.get(sid) : null;
-      if (nw) { nw.lift = 0.12; nw.hover = true; }
+      if (nw) { nw.lift = 0.12; nw.hover = true; nw.notice(); }
       this.renderer.domElement.style.cursor = sid ? "pointer" : "default";
     }
     // the hover tip rides the hovered bean, saying exactly what the card's state line
@@ -2035,8 +2272,17 @@ export class HiveWorld {
       }
     }
     const dead: string[] = [];
-    for (const [psid, pad] of this.pads)
+    for (const [psid, pad] of this.pads) {
       if (pad.update(dt, this.yawCur, this.distCur, psid === this.hovered || psid === this.selected)) dead.push(psid);
+      // the update's one-shot flags → dust, the Nintendo landing language: a touchdown
+      // puffs at the feet, a fresh pad puffs as it pops, a sinking tile puffs last
+      const dustAt = pad.consumeLanding();
+      if (dustAt) this.particles.burst(dustAt, [0x6c7f99, 0x44536a], 3, 0.5, -2.2, 0.32);
+      if (pad.consumePop())
+        this.particles.burst(pad.group.position.clone().setY(0.08), [ACCENT, 0x33415c], 10, 1.0, -2.6, 0.4);
+      if (pad.consumeSink())
+        this.particles.burst(pad.group.position.clone().setY(0.06), [0x3d4a5f, 0x2a3648], 8, 0.7, -1.4, 0.5);
+    }
     for (const psid of dead) {
       const pad = this.pads.get(psid)!;
       this.scene.remove(pad.group);

@@ -2,18 +2,19 @@
 // land on exactly 1, beats stay inside their window and repeat cleanly. These curves are
 // what every scale/lift/hop in the world rides — pin the shape, not the frames.
 import { describe, expect, test } from "bun:test";
-import { backOut, cycleBeat, popOut, springStep } from "../ui/motion";
+import { backOut, cycleBeat, popOut, springVel } from "../ui/motion";
 
 function runSpring(omega: number, zeta: number, dt: number, steps: number) {
   let x = 0, v = 0, peak = -Infinity;
   for (let i = 0; i < steps; i++) {
-    [x, v] = springStep(x, v, 1, dt, omega, zeta);
+    v = springVel(x, v, 1, dt, omega, zeta);
+    x += v * dt;                             // the call-site contract: integrate with the NEW v
     peak = Math.max(peak, x);
   }
   return { x, v, peak };
 }
 
-describe("springStep", () => {
+describe("springVel", () => {
   test("converges to the target and comes to rest", () => {
     const { x, v } = runSpring(16, 0.6, 1 / 60, 600);
     expect(Math.abs(x - 1)).toBeLessThan(1e-3);

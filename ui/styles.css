@@ -61,7 +61,11 @@ button { font-family: inherit; }
   display: flex; flex-direction: column; gap: 6px;
   opacity: 0; transition: opacity 0.4s ease;
 }
-#hive-empty.show { opacity: 1; }
+#hive-empty.show { opacity: 1; animation: empty-float 3.6s ease-in-out infinite; }
+@keyframes empty-float {
+  0%, 100% { transform: translate(-50%, -50%); }
+  50% { transform: translate(-50%, calc(-50% - 6px)); }
+}
 #hive-empty b { font: 600 15px var(--font); color: rgba(215, 220, 227, 0.85); }
 #hive-empty span { font: 13px var(--font); color: rgba(154, 160, 166, 0.75); }
 
@@ -98,8 +102,9 @@ button { font-family: inherit; }
   font: 12px var(--font);
   color: var(--text);
   padding: 10px 12px 12px;
-  opacity: 0; transform: translateX(14px); pointer-events: none;
-  transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+  opacity: 0; transform: translateX(18px) scale(0.96); pointer-events: none;
+  /* flies in with a small overshoot — the same pop language as the board */
+  transition: opacity 0.18s ease, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 #hive-card.open { opacity: 1; transform: none; pointer-events: auto; }
 #hive-card .hc-head { display: flex; align-items: center; gap: 8px; }
@@ -201,20 +206,31 @@ button { font-family: inherit; }
   border-radius: 46% 46% 44% 44% / 58% 58% 40% 40%;
   background: radial-gradient(circle at 35% 28%, #dfe9f5, #9fb3c8 78%);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-  transition: transform 0.16s cubic-bezier(0.2, 0.9, 0.3, 1.4); }
-.ht-bean:hover .hb-body { transform: translateY(-3px); }
-.ht-bean:active .hb-body { transform: translateY(-1px) scale(0.94); }
+  /* springier hop than a plain ease — the tray beans share the board's jelly */
+  transition: transform 0.22s cubic-bezier(0.34, 1.8, 0.5, 1); }
+.ht-bean:hover .hb-body { transform: translateY(-4px) rotate(-3deg); }
+.ht-bean:active .hb-body { transform: translateY(-1px) scale(0.92, 0.88); }
 .ht-bean.default .hb-body { box-shadow: 0 0 0 2px var(--accent), 0 2px 6px rgba(0, 0, 0, 0.4); }
 .ht-bean .hb-body i { position: absolute; top: 38%; width: 4px; height: 5px; border-radius: 50%;
-  background: #10151c; }
+  background: #10151c; animation: tray-blink 4.6s infinite; }
 .ht-bean .hb-body i:first-child { left: 30%; }
 .ht-bean .hb-body i:last-child { right: 30%; }
+/* the tray beans are alive too: a blink every few seconds, neighbours out of phase */
+.ht-bean:nth-child(2n) .hb-body i { animation-delay: 1.7s; }
+.ht-bean:nth-child(3n) .hb-body i { animation-delay: 3.1s; }
+@keyframes tray-blink {
+  0%, 91%, 96%, 100% { transform: scaleY(1); }
+  93.5% { transform: scaleY(0.12); }
+}
 .ht-bean .hb-name { font-size: 12px; }
 .ht-bean .hb-eff { border: 1px solid rgba(255, 255, 255, 0.16); background: none; color: var(--dim);
   border-radius: 6px; font-size: 0.82em; opacity: 0.85; padding: 0 6px; cursor: pointer; }
 .ht-bean .hb-eff:hover { color: #fff; border-color: rgba(255, 255, 255, 0.3); }
 .ht-bean.carried { position: fixed; left: 0; top: 0; z-index: 9; pointer-events: none; margin: 0;
   background: none; }
+/* the carried copy hangs from the hand: a small tilt + a deeper shadow says "lifted" */
+.ht-bean.carried .hb-body { transform: translateY(-4px) rotate(-7deg);
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.55); }
 
 /* ── in-place board rename: the nameplate becomes an editor exactly where it sits ── */
 #hive-rename {
@@ -240,9 +256,10 @@ button { font-family: inherit; }
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
   color: #ffb3b6; font: 12px var(--font);
   padding: 6px 12px; white-space: nowrap;
-  opacity: 0; transition: opacity 0.15s ease;
+  opacity: 0; transform: translateX(-50%) translateY(10px);
+  transition: opacity 0.15s ease, transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-#hive-note.show { opacity: 1; }
+#hive-note.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 /* ── the trash dock: slides in only while a session is carried ─────────────────── */
 #hive-trash {
@@ -265,6 +282,13 @@ button { font-family: inherit; }
   color: #ffb3b6; border-color: var(--red);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 0 14px rgba(229, 72, 77, 0.45);
   transform: translateX(-50%) translateY(0) scale(1.07);
+  /* armed = hungry: a slow chomp-y wiggle while the bean hovers over it */
+  animation: trash-wiggle 0.5s ease-in-out infinite;
+}
+@keyframes trash-wiggle {
+  0%, 100% { transform: translateX(-50%) translateY(0) scale(1.07) rotate(0deg); }
+  25% { transform: translateX(-50%) translateY(0) scale(1.07) rotate(-2.2deg); }
+  75% { transform: translateX(-50%) translateY(1px) scale(1.07) rotate(2.2deg); }
 }
 
 /* ══ the chat dock ══════════════════════════════════════════════════════════════
@@ -285,6 +309,9 @@ button { font-family: inherit; }
   font: 14px/1.55 var(--font); color: var(--text);
 }
 #chat-dock.open { transform: none; }
+/* small screens: the dock owns the whole width — a 440px minimum on a 390px phone
+   was the "messy chat window" (the pocket view at /go is the real answer there) */
+@media (max-width: 720px) { #chat-dock { width: 100vw; border-right: 0; } }
 
 #chat-dock .cd-head {
   display: flex; align-items: center; gap: 9px;

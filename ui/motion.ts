@@ -3,14 +3,15 @@
 // feel of the board is pinned by tests: springs settle, pops overshoot and land on 1,
 // beats stay inside their window. The world calls these per frame; keep them branch-light.
 
-// One integration step of a damped spring toward `target` — semi-implicit Euler, stable
-// for the board's fixed 60Hz sim up to its 3-step catch-up (omega·dt < 2). zeta < 1
-// overshoots and wobbles (jelly); zeta ≥ 1 settles without crossing. Returns [x, v].
-export function springStep(
+// One velocity step of a damped spring toward `target` — the caller then integrates
+// `x += v·dt` with the NEW velocity (semi-implicit Euler, stable for the board's fixed
+// 60Hz sim up to its 3-step catch-up while omega·dt < 2). Split this way so the frame
+// loop stays allocation-free: no tuple, two plain number assignments at the call site.
+// zeta < 1 overshoots and wobbles (jelly); zeta ≥ 1 settles without crossing.
+export function springVel(
   x: number, v: number, target: number, dt: number, omega: number, zeta: number,
-): [number, number] {
-  const nv = v + (-omega * omega * (x - target) - 2 * zeta * omega * v) * dt;
-  return [x + nv * dt, nv];
+): number {
+  return v + (-omega * omega * (x - target) - 2 * zeta * omega * v) * dt;
 }
 
 // The arrival pop, 0→1: rises fast, overshoots ~20%, dips, lands on exactly 1. The shape
