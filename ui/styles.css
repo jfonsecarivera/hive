@@ -371,6 +371,11 @@ button { font-family: inherit; }
   color: #e3edf7;
 }
 
+/* a steer: sent INTO a running turn — the label says it landed, not queued */
+.m-user.steer { border-color: rgba(224, 176, 32, 0.4); }
+.m-user.steer::after { content: "↳ interrupted the turn to redirect"; display: block;
+  font: 10px var(--font); color: rgba(224, 176, 32, 0.75); margin-top: 4px; text-align: right; }
+
 /* assistant prose; while STREAMING it's one plain text node (cheap to grow) that
    settles into markdown on completion */
 .m-asst { max-width: 100%; word-break: break-word; }

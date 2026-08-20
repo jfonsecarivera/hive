@@ -54,7 +54,7 @@ export interface AskQuestion {
 // Chat events are UPSERTS keyed by id: a streaming text block or a running tool
 // re-sends the same id with more data, and the UI patches the node in place.
 export type ChatEvent =
-  | { k: "user"; id: string; t: number; text: string }
+  | { k: "user"; id: string; t: number; text: string; steer?: boolean }
   | { k: "text"; id: string; t: number; text: string; done: boolean }
   | { k: "think"; id: string; t: number; text: string; done: boolean }
   | { k: "tool"; id: string; t: number; name: string; title: string;

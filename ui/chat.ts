@@ -221,7 +221,7 @@ export class ChatDock {
     this.busy = busy;
     this.head.stop.classList.toggle("show", busy);
     (this.el.querySelector(".cd-stopc") as HTMLElement).hidden = !busy;
-    this.input.placeholder = busy ? "Steer — lands in the running turn… (Esc stops)" : "Say something…";
+    this.input.placeholder = busy ? "Send interrupts & redirects — Esc just stops" : "Say something…";
   }
 
   // the session's dynamic slash commands landed (watch reply, or a commands_changed push)
@@ -352,7 +352,7 @@ export class ChatDock {
           } else { pctEl.remove(); bar.remove(); }
           break;
         }
-        d.className = "m-user";
+        d.className = "m-user" + (ev.steer ? " steer" : "");
         d.textContent = ev.text;
         break;
       }

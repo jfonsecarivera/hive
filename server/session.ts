@@ -150,6 +150,10 @@ export class AgentSession {
   private pending: SDKUserMessage[] = [];
   private wake: (() => void) | null = null;
   private inputsClosed = false;
+  // messages sent WHILE a turn ran: a steer = interrupt + redirect. The turn is cut and
+  // these deliver the moment it lands — priority:"now" alone proved to queue politely
+  // behind the turn (measured live 2026-08-19: four sleeps ran to completion around it).
+  private steerQueue: string[] = [];
 
   private costBase: number;
   private costLive = 0;
@@ -353,6 +357,7 @@ export class AgentSession {
     } else {
       this.settle();
     }
+    this.flushSteers();                   // a redirect survives even a dying client
   }
 
   // ── inbound SDK messages → chat events + state ──────────────────────────────
@@ -536,6 +541,7 @@ export class AgentSession {
           this.settle();
         }
         this.onChange(this.sid);
+        this.flushSteers();               // an interrupted turn's redirect goes out NOW
         break;
       }
       case "tool_use_summary":
@@ -685,7 +691,20 @@ export class AgentSession {
     this.ensureClient();
     const t = now();
     this.lastT = t;
+    // a message sent while a turn RUNS is a STEER: interrupt + redirect. The bubble
+    // lands now; the message delivers the instant the cut turn's result arrives (the
+    // user 2026-08-19, whose "run it on an H200" sat queued behind a running scp).
+    if (this.inflight) {
+      this.emit({ k: "user", id: `u${++this.evn}-${t.toString(36)}`, t, text, steer: true });
+      this.steerQueue.push(text);
+      void this.interrupt();
+      return;
+    }
     this.emit({ k: "user", id: `u${++this.evn}-${t.toString(36)}`, t, text });
+    this.deliver(text, t);
+  }
+
+  private deliver(text: string, t: number) {
     const firstLine = text.trim().split("\n")[0].slice(0, 96);
     if (!firstLine.startsWith("/")) this.goal = firstLine;
     // context ops get their state the moment the user asks (instant feedback); the
@@ -710,6 +729,13 @@ export class AgentSession {
     } as SDKUserMessage);
     this.wake?.();
     this.settle();
+  }
+
+  // the cut turn landed (or died): redirect with everything steered in the meantime
+  private flushSteers() {
+    if (!this.steerQueue.length || this.inflight || this.ended) return;
+    const text = this.steerQueue.splice(0).join("\n\n");
+    queueMicrotask(() => { if (!this.ended) this.deliver(text, now()); });
   }
 
   async interrupt() {
