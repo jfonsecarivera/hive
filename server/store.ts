@@ -55,6 +55,10 @@ export class Store {
     `);
     try { this.db.exec("ALTER TABLE duties ADD COLUMN self_paced INTEGER DEFAULT 0"); }
     catch { /* column already there */ }
+    this.db.exec(`CREATE TABLE IF NOT EXISTS etas(
+      name TEXT PRIMARY KEY, gist TEXT, task TEXT, eta_text TEXT, eta_iso TEXT,
+      conf TEXT, status TEXT, detail TEXT, milestone TEXT, updated_t INTEGER
+    );`);
     this.seq = (this.db.query("SELECT COALESCE(MAX(seq),0) AS m FROM chat").get() as any).m;
   }
 
@@ -122,6 +126,33 @@ export class Store {
 
   allDuties(): { sid: string; every_s: number; prompt: string; last_run_t: number; self_paced: number }[] {
     return this.db.query("SELECT sid, every_s, prompt, last_run_t, self_paced FROM duties").all() as any;
+  }
+
+  // ETA records: a partial write changes only the fields given; "" clears a field
+  setEta(name: string, patch: Record<string, string | undefined>, nowT: number) {
+    const cur = (this.db.query("SELECT * FROM etas WHERE name = $n").get({ $n: name }) || {}) as Record<string, unknown>;
+    const cols = ["gist", "task", "eta_text", "eta_iso", "conf", "status", "detail", "milestone"];
+    const next: Record<string, string | null> = {};
+    for (const c of cols) {
+      const v = patch[c];
+      next[c] = v === undefined ? ((cur[c] as string) ?? null) : (v === "" ? null : v);
+    }
+    this.db.query(`INSERT INTO etas(name,gist,task,eta_text,eta_iso,conf,status,detail,milestone,updated_t)
+      VALUES($n,$gist,$task,$eta_text,$eta_iso,$conf,$status,$detail,$milestone,$t)
+      ON CONFLICT(name) DO UPDATE SET gist=$gist, task=$task, eta_text=$eta_text, eta_iso=$eta_iso,
+        conf=$conf, status=$status, detail=$detail, milestone=$milestone, updated_t=$t`)
+      .run({ $n: name, $gist: next.gist, $task: next.task, $eta_text: next.eta_text, $eta_iso: next.eta_iso,
+             $conf: next.conf, $status: next.status, $detail: next.detail, $milestone: next.milestone, $t: nowT });
+  }
+
+  rmEta(name: string) {
+    this.db.query("DELETE FROM etas WHERE name = $n").run({ $n: name });
+  }
+
+  allEtas(): { name: string; gist: string | null; task: string | null; eta_text: string | null;
+    eta_iso: string | null; conf: string | null; status: string | null; detail: string | null;
+    milestone: string | null; updated_t: number }[] {
+    return this.db.query("SELECT * FROM etas ORDER BY name").all() as any;
   }
 
   kvGet(k: string): string | null {

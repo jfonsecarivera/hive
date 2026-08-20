@@ -186,6 +186,18 @@ export class Hub {
           return null;
         } catch (e) { return String((e as Error)?.message || e); }
       },
+      eta: (fromSid, name, patch) => {
+        const from = this.sessions.get(fromSid);
+        const about = (name || from?.name || "").trim();
+        if (!about) return "no session name to file this under";
+        // eta_iso must be a real timestamp or empty — a garbage deadline would tick lies
+        if (patch.eta_iso && Number.isNaN(Date.parse(patch.eta_iso))) {
+          return `eta_iso "${patch.eta_iso}" isn't a parseable timestamp — use ISO-8601 UTC like 2026-08-20T21:30:00Z`;
+        }
+        this.store.setEta(about, patch, Math.floor(Date.now() / 1000));
+        this.publish("hive", this.etasMsg());
+        return `eta board updated for ${about}`;
+      },
       notify: async (fromSid, message) => {
         const hook = notifyWebhook();
         if (!hook) return "notifications aren't configured on this machine (no webhook)";
@@ -313,6 +325,18 @@ export class Hub {
   }
 
   modelChoices(): ModelChoice[] { return this.models; }
+
+  etasMsg(): string {
+    const etas = this.store.allEtas().map((r) => ({
+      name: r.name,
+      ...(r.gist ? { gist: r.gist } : {}), ...(r.task ? { task: r.task } : {}),
+      ...(r.eta_text ? { etaText: r.eta_text } : {}), ...(r.eta_iso ? { etaIso: r.eta_iso } : {}),
+      ...(r.conf ? { conf: r.conf } : {}), ...(r.status ? { status: r.status } : {}),
+      ...(r.detail ? { detail: r.detail } : {}), ...(r.milestone ? { milestone: r.milestone } : {}),
+      updatedT: r.updated_t,
+    }));
+    return JSON.stringify({ type: "etas", etas } satisfies ServerMsg);
+  }
 
   capsMsg(sid: string): string {
     const s = this.sessions.get(sid);

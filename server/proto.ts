@@ -74,6 +74,21 @@ export interface CmdInfo { name: string; description: string; argumentHint: stri
 // a saved specialist on the duty shelf
 export interface ShelfItem { name: string; every: string; model?: string; live: boolean }
 
+// one session's ETA record — written by agents via the hive_eta tool (modeled on the
+// user's eta-dash: structured fields, machine-readable deadline, human confidence)
+export interface EtaRow {
+  name: string;                  // the session it's ABOUT (keeper duties write peers')
+  gist?: string;                 // the one-liner the board leads with
+  task?: string;
+  etaText?: string;              // human phrasing ("~2:30 PM PT, after evals")
+  etaIso?: string;               // machine deadline → the ticking countdown
+  conf?: string;                 // "high" / "med" / …
+  status?: string;               // working|pending|done|blocked|idle|gone (open vocab)
+  detail?: string;
+  milestone?: string;
+  updatedT: number;              // last write (epoch s) — staleness is shown, never hidden
+}
+
 export interface Defaults {
   model: string;
   effort: string;
@@ -104,6 +119,7 @@ export type ServerMsg =
   | { type: "hive"; sessions: SessionSnap[] }
   | { type: "chat"; sid: string; reset?: boolean; events: ChatEvent[] }
   | { type: "caps"; sid: string; commands: CmdInfo[] }
+  | { type: "etas"; etas: EtaRow[] }
   | { type: "defaults"; host: string; defaults: Defaults; models: ModelChoice[]; efforts: string[];
       shelf: ShelfItem[] }
   | { type: "err"; sid?: string; title: string; text?: string }

@@ -80,6 +80,7 @@ const server = Bun.serve<WsData>({
       ws.subscribe("hive");
       ws.send(hub.defaultsMsg());
       ws.send(hub.hiveMsg());
+      ws.send(hub.etasMsg());
     },
     message(ws, raw) {
       let op: ClientOp;

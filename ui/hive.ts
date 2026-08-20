@@ -14,6 +14,7 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { delegate } from "./actions";
 import { assignSlots, axialToXZ, frameDt, frameRadius, HEX_SIZE, hexCorner, hexDistance, latticeSegments, PAD_R, PAD_THETA, RIM_THETA, ringOf, slotOfAxial, spiralSlot, xzToAxial } from "./hive-layout";
 import { diffSessions, finishedLine, foldEnding, foldSeenAsk, foldSeenDone, hiveAge, isFaded, isKnownState, stateLine, type HiveSession, type SeenDone } from "./hive-model";
+import { backOut, cycleBeat, popOut, springStep } from "./motion";
 import type { ClientOp, Defaults, ModelChoice, ShelfItem } from "../server/proto";
 
 // what the world needs from the page around it — the whole outside contract
@@ -397,6 +398,14 @@ class Dweller {
   private greetT = 0;                       // greeting-wave clock (portrait open)
   private squash = 1;                       // landing squash factor, springs back to 1
   private prevY = 0;
+  private paceYaw = Math.PI / 2;            // retrying waddle heading — eased, so turns SKID
+  private paceDir = 1;
+  private cheerT = 0;                       // goal-done celebration clock
+  private perkT = 0;                        // hover notice: eyes widen for a beat
+  private carried: "no" | "held" | "scared" = "no";
+  private leanX = 0; private leanZ = 0;     // carried dangle — feet trailing the hand
+  proud = false;                            // unseen finished work: stand tall, hop for joy
+  landed = false;                           // a real touchdown — the world turns it into dust
 
   constructor(tint: string) {
     this.baseColor = new THREE.Color(tint).lerp(new THREE.Color(0xffffff), 0.1);
@@ -533,10 +542,31 @@ class Dweller {
     this.pop = Math.max(this.pop, 0.45);
   }
 
-  // the portrait greeting: one bright wave of the right arm, then back to work
+  // the portrait greeting: a hop hello + one bright wave of the right arm, then back to work
   greet() {
     this.greetT = 0.9;
     this.pop = Math.max(this.pop, 0.3);
+  }
+
+  // a goal completed: they turn to you and jump for joy — twice
+  cheer() { this.cheerT = 1.2; }
+
+  // the pointer found them: eyes widen for a beat (subtle — hover sweeps are constant)
+  perk() { this.perkT = 0.4; }
+
+  // set down after a carry: a landing squash the world answers with dust
+  thump() { this.squash = Math.max(this.squash, 1.25); this.landed = true; }
+
+  setCarried(m: "no" | "held" | "scared") {
+    if (m !== "no" && this.carried === "no") this.squash = 0.78;   // yanked up — a stretch
+    this.carried = m;
+  }
+
+  // dangle physics input: hand velocity in the bean's camera-facing frame (right, toward)
+  carryLean(vRight: number, vFwd: number, dt: number) {
+    const cl = (v: number) => Math.max(-0.38, Math.min(0.38, v));
+    this.leanZ = ease(this.leanZ, cl(-vRight * 0.045), dt, 10);
+    this.leanX = ease(this.leanX, cl(vFwd * 0.045), dt, 10);
   }
 
   update(dt: number, t: number, camYaw: number) {

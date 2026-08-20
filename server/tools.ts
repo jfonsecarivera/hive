@@ -13,6 +13,7 @@ export interface BoardAccess {
   send(from: string, name: string, message: string): string | null;   // error string | null = ok
   nextRound(fromSid: string, inS: number): string;       // self-pacing; returns the confirmation/error line
   notify(fromSid: string, message: string): Promise<string>;   // ping the USER (rate-limited)
+  eta(fromSid: string, name: string | undefined, patch: Record<string, string | undefined>): string;
 }
 
 // the notify spam guard — an agent loop must never be able to flood the user's phone.
@@ -60,6 +61,25 @@ export function hiveMcpServer(self: string, board: BoardAccess): McpSdkServerCon
           const evs = board.read(a.name, a.count);
           if (evs === null) return { content: [{ type: "text", text: `no session named "${a.name}" on this board` }], isError: true };
           return { content: [{ type: "text", text: renderEvents(evs) }] };
+        },
+      ),
+      tool(
+        "hive_eta",
+        "Publish or update an ETA record on the user's board. Only the fields you pass change; pass an empty string to clear one. Write your OWN eta (omit name) or a teammate's (an eta-keeper duty does this for everyone). eta_iso drives a live countdown on the user's phone — set it whenever you can estimate a real finish time.",
+        {
+          name: z.string().optional().describe("which session this is about; omit for yourself"),
+          gist: z.string().max(200).optional().describe("the one-liner the board leads with"),
+          task: z.string().max(200).optional(),
+          eta_text: z.string().max(200).optional().describe('human phrasing, e.g. "~2:30 PM PT, after evals"'),
+          eta_iso: z.string().max(40).optional().describe("machine deadline, ISO-8601 UTC, e.g. 2026-08-20T21:30:00Z"),
+          conf: z.string().max(20).optional().describe("high / med / low"),
+          status: z.string().max(20).optional().describe("working | pending | done | blocked | idle | gone"),
+          detail: z.string().max(600).optional(),
+          milestone: z.string().max(600).optional(),
+        },
+        async (a) => {
+          const { name, ...rest } = a;
+          return { content: [{ type: "text", text: board.eta(self, name, rest as Record<string, string | undefined>) }] };
         },
       ),
       tool(

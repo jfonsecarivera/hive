@@ -30,6 +30,30 @@ body.go { display: flex; flex-direction: column; height: 100dvh; overflow: hidde
 #go-eta-body table, #go-eta-body pre { font-size: 12px; }
 .go-dim { color: var(--dim); }
 
+/* the ETA board rows (the eta-dash vocabulary: dot · name · countdown, gist under,
+   tap for the fold; late countdowns go amber; dim ranks sink) */
+.eta-list { display: flex; flex-direction: column; }
+.eta-row { padding: 10px 2px; border-top: 1px solid rgba(255, 255, 255, 0.07); cursor: pointer; }
+.eta-row:first-child { border-top: 0; }
+.eta-row.dim { opacity: 0.55; }
+.er-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.er-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; align-self: center;
+  box-shadow: 0 0 7px currentColor; }
+.er-name { font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
+.er-cd { margin-left: auto; flex: none; font-variant-numeric: tabular-nums;
+  font: 650 16px var(--mono); white-space: nowrap; }
+.er-cd.word { font: 600 12px var(--font); color: var(--dim); }
+.er-cd.late { color: var(--gold); }
+.er-gist { color: #b9c1ca; font-size: 13px; margin: 2px 0 0 17px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eta-row.open .er-gist { white-space: normal; }
+.er-fold { display: none; flex-direction: column; gap: 5px; margin: 8px 0 2px 17px;
+  padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.07);
+  color: var(--dim); font-size: 12.5px; }
+.eta-row.open .er-fold { display: flex; }
+.er-fold > div:empty { display: none; }
+.er-upd { font-size: 11px; color: #59636e; }
+
 #go-chat-slot { flex: 1 1 auto; min-height: 0; position: relative; }
 #go-summon { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%);
   z-index: 12; cursor: pointer; border: 1px solid rgba(244, 196, 48, 0.5); border-radius: 12px;
