@@ -1090,8 +1090,11 @@ export class HiveWorld {
     window.addEventListener("pointerup", (e) => this.onPointerUp(e));
     cv.addEventListener("wheel", (e) => {
       e.preventDefault();
-      this.dist = Math.min(70, Math.max(7, this.dist * Math.exp(e.deltaY * 0.0012)));
+      this.dist = Math.min(70, Math.max(this.portraitSid ? 2.4 : 7, this.dist * Math.exp(e.deltaY * 0.0012)));
       this.idleT = 0;
+      // pulling BACK out of a portrait is leaving the conversation — the zoom gesture
+      // itself closes the chat and the camera keeps flying out to the full board
+      if (this.portraitSid && this.dist > 8) this.bridge.closeChat();
     }, { passive: false });
     window.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;

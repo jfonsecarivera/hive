@@ -11,6 +11,7 @@ import { delegate } from "./actions";
 import { acceptCommand, commandPrefix, filterCommands } from "./commands";
 import { isKnownState, stateLine, type HiveSession } from "./hive-model";
 import { renderMarkdown } from "./markdown";
+import { parseMonitor } from "./monitor";
 import type { ChatEvent, ClientOp, CmdInfo } from "../server/proto";
 
 interface Row { ev: ChatEvent; el: HTMLElement }
@@ -315,10 +316,28 @@ export class ChatDock {
   private build(ev: ChatEvent): HTMLElement {
     const d = document.createElement("div");
     switch (ev.k) {
-      case "user":
+      case "user": {
+        // harness monitor notifications arrive as user-role plumbing — render the
+        // human part (what's watched, the latest line, the progress), not the XML
+        const mon = parseMonitor(ev.text);
+        if (mon) {
+          d.className = "m-mon";
+          d.innerHTML = '<div class="mo-head"><span class="mo-ico">◉</span><span class="mo-sum"></span>' +
+            '<span class="mo-pct"></span></div><div class="mo-event"></div><div class="mo-bar"><i></i></div>';
+          (d.querySelector(".mo-sum") as HTMLElement).textContent = mon.summary || "monitor";
+          (d.querySelector(".mo-event") as HTMLElement).textContent = mon.event;
+          const pctEl = d.querySelector(".mo-pct") as HTMLElement;
+          const bar = d.querySelector(".mo-bar") as HTMLElement;
+          if (mon.pct != null) {
+            pctEl.textContent = mon.pct.toFixed(mon.pct >= 99.95 ? 0 : 1) + "%";
+            (bar.firstElementChild as HTMLElement).style.width = mon.pct.toFixed(2) + "%";
+          } else { pctEl.remove(); bar.remove(); }
+          break;
+        }
         d.className = "m-user";
         d.textContent = ev.text;
         break;
+      }
       case "text":
         // streaming text renders as PLAIN TEXT (one text node, delta-appended) and only
         // settles into markdown ONCE, on done — re-parsing the whole message into
