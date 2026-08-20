@@ -13,6 +13,7 @@ export interface RompSession {
   cwd: string;
   bg: string;                 // identity color; "" when unparsable
   fg: string;
+  alive: boolean;             // romp's kernel currently holds this session (sdk record)
   model?: string;
   effort?: string;
   permMode?: string;
@@ -29,14 +30,11 @@ export function readRompRegistry(dir = rompStateDir()): Map<string, RompSession>
   const out = new Map<string, RompSession>();
   let files: string[];
   try { files = readdirSync(join(dir, "names")); } catch { return out; }   // no romp here
-  // romp's own dismissal record: archive/<sid>.json means the user retired that session
-  // on romp's dashboard — the mirror must not resurrect what they already put away
-  let archived = new Set<string>();
-  try { archived = new Set(readdirSync(join(dir, "archive")).map((a) => a.replace(/\.json$/, ""))); }
-  catch { /* no archive dir — nothing was dismissed */ }
+  // NOTE: romp's archive/ dir is NOT a dismissal record — it stores per-episode
+  // summaries written on /clear while the session lives on (verified live 2026-08-19:
+  // every active session had one). Liveness comes from the sdk record's `alive` flag.
   for (const f of files) {
     if (!/^[0-9a-f-]{36}$/i.test(f)) continue;
-    if (archived.has(f)) continue;
     try {
       // split BEFORE trimming: a whole-line trim eats an empty leading field and
       // shifts every column over
@@ -47,10 +45,12 @@ export function readRompRegistry(dir = rompStateDir()): Map<string, RompSession>
         id: f, ids: [f], name, cwd: cwd || "",
         bg: /^#[0-9a-fA-F]{6}$/.test(bg) ? bg : "",
         fg: FG_WORDS[fg] || (fg.startsWith("#") ? fg : "#ffffff"),
+        alive: false,
       };
       let lastSid = "";
       try {
         const sdk = JSON.parse(readFileSync(join(dir, "sdk", f + ".json"), "utf8"));
+        rec.alive = sdk.alive === true;
         if (typeof sdk.model === "string" && sdk.model) rec.model = sdk.model;
         if (typeof sdk.effort === "string" && sdk.effort) rec.effort = sdk.effort;
         if (typeof sdk.mode === "string" && sdk.mode) rec.permMode = sdk.mode;

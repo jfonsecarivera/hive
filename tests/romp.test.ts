@@ -10,20 +10,14 @@ const SID_A = "11111111-2222-3333-4444-555555555555";
 const SID_B = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const SID_C = "99999999-8888-7777-6666-555555555555";
 
-const SID_D = "44444444-3333-2222-1111-000000000000";
-
 function fixtureDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "hive-romp-"));
   mkdirSync(join(dir, "names"), { recursive: true });
   mkdirSync(join(dir, "sdk"), { recursive: true });
-  mkdirSync(join(dir, "archive"), { recursive: true });
-  // an archived session: named, but the user retired it on romp's dashboard
-  writeFileSync(join(dir, "names", SID_D), "old-work\t/home/user/dev/notes-api\t#4EA8A9\twhite\n");
-  writeFileSync(join(dir, "archive", SID_D + ".json"), JSON.stringify({ headline: "done long ago" }));
   writeFileSync(join(dir, "names", SID_A), "web\t/home/user/dev/notes-api\t#98998A\tblack\n");
   writeFileSync(join(dir, "sdk", SID_A + ".json"), JSON.stringify({
     sid: SID_A, name: "web", mode: "bypassPermissions", effort: "max", model: "fable", spawnedAt: 1700000000,
-    lastSid: "12121212-3434-5656-7878-909090909090",
+    alive: true, lastSid: "12121212-3434-5656-7878-909090909090",
   }));
   writeFileSync(join(dir, "names", SID_B), "api\t/home/user/dev/notes-api\t#F85B5A\twhite\n");
   writeFileSync(join(dir, "names", "not-a-session-id"), "junk\t/x\t#000000\twhite\n");
@@ -32,20 +26,20 @@ function fixtureDir(): string {
 }
 
 describe("readRompRegistry", () => {
-  test("parses names + sdk meta, maps fg words, indexes lastSid, skips junk AND archived", () => {
+  test("parses names + sdk meta (incl. alive), maps fg words, indexes lastSid, skips junk", () => {
     const reg = readRompRegistry(fixtureDir());
     expect(reg.size).toBe(3);                  // web (by sid AND by lastSid) + api
     expect(reg.get("12121212-3434-5656-7878-909090909090")?.name).toBe("web");
-    expect(reg.has(SID_D)).toBe(false);        // romp archived it — the mirror stays quiet
     const a = reg.get(SID_A)!;
     expect(a).toEqual({
       id: SID_A, ids: [SID_A, "12121212-3434-5656-7878-909090909090"],
-      name: "web", cwd: "/home/user/dev/notes-api", bg: "#98998A", fg: "#10141a",
+      name: "web", cwd: "/home/user/dev/notes-api", bg: "#98998A", fg: "#10141a", alive: true,
       model: "fable", effort: "max", permMode: "bypassPermissions", spawnedAt: 1700000000,
     });
-    const b = reg.get(SID_B)!;                 // tmux-backend: names line only
+    const b = reg.get(SID_B)!;                 // tmux-backend: names line only, never alive
     expect(b.fg).toBe("#ffffff");
     expect(b.model).toBeUndefined();
+    expect(b.alive).toBe(false);
   });
 
   test("no romp on the machine → empty map, no throw", () => {
@@ -55,19 +49,27 @@ describe("readRompRegistry", () => {
 
 describe("pickRompAdoptable", () => {
   const DAY = 86_400_000;
+  const HOUR = 3_600_000;
   const NOW = 1_000 * DAY;
   const info = (sessionId: string, age: number): SDKSessionInfo =>
     ({ sessionId, summary: "s", lastModified: NOW - age, cwd: "/tmp/somewhere" } as SDKSessionInfo);
-  const reg = new Map([[SID_A, {}], [SID_B, {}]]);
+  const reg = new Map([
+    [SID_A, { alive: true }],                // held by romp's kernel
+    [SID_B, { alive: false }],               // named but dead
+  ]);
 
-  test("registry sessions only, NO age window (romp's archive is the relevance signal)", () => {
+  test("alive sessions adopt at ANY age; dead ones only within the fresh grace", () => {
     const infos = [
-      info(SID_A, DAY),                      // romp-named, recent → in (even with a /tmp cwd)
-      info(SID_B, 30 * DAY),                 // romp-named, idle for a month → STILL in
-      info(SID_C, DAY),                      // not romp's → out
+      info(SID_A, 30 * DAY),                 // alive, idle a month → in (never lose the thread)
+      info(SID_B, 2 * HOUR),                 // dead but worked 2h ago → in (the revive edge)
+      info(SID_C, HOUR),                     // not romp's at all → out
     ];
-    expect(pickRompAdoptable(infos, reg, new Set(), { max: 10 })
-      .map((i) => i.sessionId)).toEqual([SID_A, SID_B]);
-    expect(pickRompAdoptable(infos, reg, new Set([SID_A, SID_B]), { max: 10 })).toEqual([]);
+    expect(pickRompAdoptable(infos, reg, new Set(), { max: 10, nowMs: NOW })
+      .map((i) => i.sessionId)).toEqual([SID_B, SID_A]);
+    expect(pickRompAdoptable(infos, reg, new Set([SID_A, SID_B]), { max: 10, nowMs: NOW })).toEqual([]);
+  });
+
+  test("dead AND stale is romp's past, not its board", () => {
+    expect(pickRompAdoptable([info(SID_B, 3 * DAY)], reg, new Set(), { max: 10, nowMs: NOW })).toEqual([]);
   });
 });

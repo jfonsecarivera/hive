@@ -49,19 +49,25 @@ export function adoptMode(rompSize: number, coldStartDone: boolean, env: string 
   return coldStartDone ? "skip" : "generic";
 }
 
-// The romp merge: when a romp registry exists, the board mirrors ROMP'S sessions —
-// the ones the user already knows by name — not a guess from raw transcripts. NO time
-// window here: romp's archive is the relevance signal (a session romp still shows is
-// current however long it has idled — "never lose the thread"); the cap is the only
-// bound, newest-first, and known ids never slide it deeper.
+// The romp merge: the board mirrors what romp's dashboard actually SHOWS — the
+// sessions its kernel holds (`alive` on the sdk record), plus a short transcript-
+// freshness grace for the just-ended/mid-revive edge (verified live 2026-08-19: alive
+// gave 12 of the visible 13; the 13th was working that minute). Named-but-dead-and-
+// stale sessions are romp's past, not its board. Cap bounds it, newest-first, and
+// known ids never slide the window deeper.
+export const ROMP_GRACE_MS = 24 * 3600_000;
+
 export function pickRompAdoptable(
   infos: SDKSessionInfo[],
-  registry: ReadonlyMap<string, unknown>,
+  registry: ReadonlyMap<string, { alive: boolean }>,
   knownClaudeIds: ReadonlySet<string>,
-  rules: Pick<AdoptRules, "max">,
+  rules: Pick<AdoptRules, "max" | "nowMs">,
 ): SDKSessionInfo[] {
   return infos
-    .filter((i) => i.sessionId && registry.has(i.sessionId))
+    .filter((i) => {
+      const r = i.sessionId ? registry.get(i.sessionId) : undefined;
+      return !!r && (r.alive || (i.lastModified || 0) >= rules.nowMs - ROMP_GRACE_MS);
+    })
     .sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0))
     .slice(0, rules.max)
     .filter((i) => !knownClaudeIds.has(i.sessionId));
