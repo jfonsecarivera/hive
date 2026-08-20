@@ -121,6 +121,12 @@ function handle(ws: Bun.ServerWebSocket<WsData>, op: ClientOp) {
       ws.data.watching.delete(op.sid);
       ws.unsubscribe(`chat:${op.sid}`);
       break;
+    case "summon":
+      hub.summon(op.name);
+      break;
+    case "unsave":
+      hub.unsave(op.name);
+      break;
     case "setDefaults": {
       hub.setDefaults(op);
       server.publish("hive", hub.defaultsMsg());

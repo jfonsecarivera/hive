@@ -1,10 +1,11 @@
-// The duty roster — SAVED duties, the ones the user always wants (an eta tracker, a
-// board steward). A plain JSON file is the source of truth: ~/.hive/duties.json,
-// editable by hand, by agents, by git. Hive RECONCILES against it at boot and on a
-// slow tick — a saved duty whose bean is missing gets re-summoned, hat and all.
+// The duty SHELF — saved specialists, the ones the user always wants around (an eta
+// tracker, a manager, a bottleneck hunter). A plain JSON file is the source of truth:
+// ~/.hive/duties.json, editable by hand, by agents, by git.
 //   { "eta": { "every": "10m", "prompt": "…", "model": "haiku", "effort": "low", "cwd": "~" } }
-// Composer and file stay in sync: /duty save writes an entry, /duty off (and trashing
-// the bean) removes it, editing the file applies within a reconcile tick.
+// The shelf shows in the tray; DRAGGING a specialist onto a hexagon hires it (session +
+// duty + hat), trashing its bean dismisses the instance (the shelf keeps the
+// specialist), and dragging the shelf chip itself to the trash removes it for good.
+// /duty save adds the current session's job to the shelf.
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -63,25 +64,6 @@ export function saveRoster(m: Map<string, RosterEntry>, path = rosterPath()) {
   writeFileSync(path, JSON.stringify(o, null, 2) + "\n");
 }
 
-// What reconciliation should DO, given the roster and the live world — pure, tested.
-// The file is authoritative for saved duties: a missing bean is summoned, a missing or
-// drifted duty is (re)applied. Live sessions the roster doesn't name are untouched.
-export interface LiveDutyView { name: string; everyS: number | null; prompt: string | null }
-export type RosterAction =
-  | { act: "summon"; name: string; entry: RosterEntry }
-  | { act: "apply"; name: string; everyS: number; prompt: string };
-
-export function reconcileActions(roster: Map<string, RosterEntry>, live: LiveDutyView[]): RosterAction[] {
-  const byName = new Map(live.map((l) => [l.name, l] as const));
-  const out: RosterAction[] = [];
-  for (const [name, entry] of roster) {
-    const everyS = parseEvery(entry.every);
-    if (everyS === null) continue;
-    const l = byName.get(name);
-    if (!l) { out.push({ act: "summon", name, entry }); continue; }
-    if (l.everyS !== everyS || l.prompt !== entry.prompt) {
-      out.push({ act: "apply", name, everyS, prompt: entry.prompt });
-    }
-  }
-  return out;
-}
+// NOTE deliberately ABSENT: auto-summon/reconcile. The shelf never hires by itself
+// (the user 2026-08-19, who ended eta minutes after it self-summoned: "take them
+// whenever I want") — a specialist joins the board only through the user's own drag.

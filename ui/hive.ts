@@ -14,7 +14,7 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { delegate } from "./actions";
 import { assignSlots, axialToXZ, frameDt, frameRadius, HEX_SIZE, hexCorner, hexDistance, latticeSegments, PAD_R, PAD_THETA, RIM_THETA, ringOf, slotOfAxial, spiralSlot, xzToAxial } from "./hive-layout";
 import { diffSessions, finishedLine, foldEnding, foldSeenAsk, foldSeenDone, hiveAge, isFaded, isKnownState, stateLine, type HiveSession, type SeenDone } from "./hive-model";
-import type { ClientOp, Defaults, ModelChoice } from "../server/proto";
+import type { ClientOp, Defaults, ModelChoice, ShelfItem } from "../server/proto";
 
 // what the world needs from the page around it — the whole outside contract
 export interface Bridge {
@@ -1400,6 +1400,28 @@ export class HiveWorld {
   trayDragEnd() {
     this.ghostHover = false;
     this.ghostTo(this.ghostHome);
+    this.trashEl.classList.remove("show", "armed");
+  }
+
+  // shelf-chip drags can also end on the TRASH DOCK (remove the specialist for good):
+  // the dock slides in while a shelf chip is carried, arming as the chip nears it
+  shelfDragMove(clientX: number, clientY: number, label: string): "trash" | number | null {
+    this.trashEl.classList.add("show");
+    (this.trashEl.querySelector(".ht-label") as HTMLElement).textContent = label;
+    const r = this.trashEl.getBoundingClientRect();
+    const over = clientX >= r.left - 14 && clientX <= r.right + 14 && clientY >= r.top - 14;
+    this.trashEl.classList.toggle("armed", over);
+    if (over) { this.ghostHover = false; return "trash"; }
+    return this.trayHover(clientX, clientY);
+  }
+
+  // hire a specialist onto the dropped cell: reserve it (same mechanics as a model
+  // drop), spark, and let the server do the real work
+  summonAt(slot: number, name: string) {
+    this.reservedSlot = slot;
+    const p = axialToXZ(spiralSlot(slot), HEX_SIZE);
+    this.particles.burst(new THREE.Vector3(p.x, 0.6, p.z), [0xf4c430, 0xffe28a, ACCENT], 18, 2.0);
+    this.bridge.op({ op: "summon", name });
   }
 
   autoName(alias: string): string {
@@ -2051,15 +2073,15 @@ export class Tray {
 
   constructor(private world: HiveWorld, private bridge: Bridge) {}
 
-  setChoices(models: ModelChoice[], efforts: string[], defaults: Defaults) {
+  setChoices(models: ModelChoice[], efforts: string[], defaults: Defaults, shelf: ShelfItem[] = []) {
     this.defaults.model = defaults.model;
     this.defaults.effort = defaults.effort;
-    // the roster is DYNAMIC (a live session reports the real list): rebuild when it moves
-    const key = JSON.stringify(models);
+    // both rows are DYNAMIC (live model roster; the shelf follows duties.json)
+    const key = JSON.stringify([models, shelf]);
     if (models.length && key !== this.roster) {
       this.roster = key;
       document.getElementById("hive-tray")?.remove();
-      this.build(models, efforts);
+      this.build(models, efforts, shelf);
     }
     this.mark();
   }
@@ -2070,12 +2092,64 @@ export class Tray {
     });
   }
 
-  private build(models: ModelChoice[], efforts: string[]) {
+  private build(models: ModelChoice[], efforts: string[], shelf: ShelfItem[]) {
     const tray = document.createElement("div");
     tray.id = "hive-tray";
+    // ── the SHELF: saved specialists, hired by drag. A live one sits dimmed (already
+    // on the board); dragging a chip to the trash dock removes it from the shelf. ──
+    if (shelf.length) {
+      const row = document.createElement("div");
+      row.className = "ht-shelf";
+      for (const it of shelf) {
+        const chip = document.createElement("div");
+        chip.className = "ht-bean ht-duty" + (it.live ? " live" : "");
+        chip.title = it.live
+          ? `${it.name} is on the board (every ${it.every})`
+          : `Drag onto a hexagon to hire ${it.name} (every ${it.every}). Drag to the trash to remove it from the shelf.`;
+        chip.innerHTML = '<div class="hb-body"><b class="hb-hat"></b><i></i><i></i></div>' +
+          `<span class="hb-name">${it.name.replace(/[<>&"]/g, "")}</span>` +
+          `<span class="hb-eff">${it.every}</span>`;
+        chip.addEventListener("pointerdown", (e) => {
+          if (it.live) return;                       // already working — nothing to drag
+          e.preventDefault();
+          const sx = e.clientX, sy = e.clientY;
+          let carried: HTMLElement | null = null;
+          const move = (ev: PointerEvent) => {
+            if (!carried && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 6) {
+              carried = chip.cloneNode(true) as HTMLElement;
+              carried.classList.add("carried");
+              document.body.appendChild(carried);
+              chip.classList.add("lifted");
+            }
+            if (carried) {
+              carried.style.transform = `translate(${ev.clientX}px,${ev.clientY}px) translate(-50%, -60%)`;
+              this.world.shelfDragMove(ev.clientX, ev.clientY, `Drop to remove ${it.name} from the shelf`);
+            }
+          };
+          const up = (ev: PointerEvent) => {
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", up);
+            chip.classList.remove("lifted");
+            if (carried) {
+              carried.remove();
+              const hit = this.world.shelfDragMove(ev.clientX, ev.clientY, "");
+              if (hit === "trash") this.bridge.op({ op: "unsave", name: it.name });
+              else if (typeof hit === "number") this.world.summonAt(hit, it.name);
+              this.world.trayDragEnd();
+            }
+          };
+          window.addEventListener("pointermove", move);
+          window.addEventListener("pointerup", up);
+        });
+        row.appendChild(chip);
+      }
+      tray.appendChild(row);
+    }
     const effKey = "hive:trayEfforts";
     let effSel: Record<string, string> = {};
     try { effSel = JSON.parse(localStorage.getItem(effKey) || "{}") || {}; } catch { /* fresh */ }
+    const mrow = document.createElement("div");
+    mrow.className = "ht-models";
     for (const mc of models) {
       const bean = document.createElement("div");
       bean.className = "ht-bean";
@@ -2132,8 +2206,9 @@ export class Tray {
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", up);
       });
-      tray.appendChild(bean);
+      mrow.appendChild(bean);
     }
+    tray.appendChild(mrow);
     document.body.appendChild(tray);
     this.mark();
   }

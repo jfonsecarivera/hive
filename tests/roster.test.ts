@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fmtEvery, loadRoster, parseEvery, reconcileActions, saveRoster, type RosterEntry } from "../server/roster";
+import { fmtEvery, loadRoster, parseEvery, saveRoster, type RosterEntry } from "../server/roster";
 
 describe("parseEvery / fmtEvery", () => {
   test("round-trips human cadences; floors at 1m", () => {
@@ -43,31 +43,5 @@ describe("roster file", () => {
   });
 });
 
-describe("reconcileActions — the file is authoritative for saved duties", () => {
-  const roster = new Map<string, RosterEntry>([
-    ["eta", { every: "10m", prompt: "track etas" }],
-    ["steward", { every: "1h", prompt: "tend the board" }],
-  ]);
-
-  test("missing bean → summon; drifted duty → apply; in-sync → nothing", () => {
-    const acts = reconcileActions(roster, [
-      { name: "eta", everyS: 600, prompt: "track etas" },        // in sync
-      { name: "unrelated", everyS: null, prompt: null },          // not the roster's business
-    ]);
-    expect(acts).toEqual([{ act: "summon", name: "steward", entry: roster.get("steward")! }]);
-
-    const drift = reconcileActions(roster, [
-      { name: "eta", everyS: 600, prompt: "OLD prompt" },
-      { name: "steward", everyS: 3600, prompt: "tend the board" },
-    ]);
-    expect(drift).toEqual([{ act: "apply", name: "eta", everyS: 600, prompt: "track etas" }]);
-  });
-
-  test("a bean present but with NO duty gets the roster's applied", () => {
-    const acts = reconcileActions(roster, [
-      { name: "eta", everyS: null, prompt: null },
-      { name: "steward", everyS: 3600, prompt: "tend the board" },
-    ]);
-    expect(acts).toEqual([{ act: "apply", name: "eta", everyS: 600, prompt: "track etas" }]);
-  });
-});
+// deliberately NO reconcile/auto-summon tests: the shelf never hires by itself —
+// a specialist joins the board only through the user's own drag (hub.summon)

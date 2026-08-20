@@ -71,6 +71,9 @@ export type ChatEvent =
 // a session's live slash commands (dynamic: supportedCommands + commands_changed)
 export interface CmdInfo { name: string; description: string; argumentHint: string }
 
+// a saved specialist on the duty shelf
+export interface ShelfItem { name: string; every: string; model?: string; live: boolean }
+
 export interface Defaults {
   model: string;
   effort: string;
@@ -92,6 +95,8 @@ export type ClientOp =
       answers?: Record<string, string | string[]> }
   | { op: "watch"; sid: string }
   | { op: "unwatch"; sid: string }
+  | { op: "summon"; name: string }        // hire a shelf specialist (duty tray drag)
+  | { op: "unsave"; name: string }        // remove a specialist from the shelf for good
   | { op: "setDefaults"; model?: string; effort?: string; cwd?: string; permMode?: string };
 
 // server → client
@@ -99,7 +104,8 @@ export type ServerMsg =
   | { type: "hive"; sessions: SessionSnap[] }
   | { type: "chat"; sid: string; reset?: boolean; events: ChatEvent[] }
   | { type: "caps"; sid: string; commands: CmdInfo[] }
-  | { type: "defaults"; host: string; defaults: Defaults; models: ModelChoice[]; efforts: string[] }
+  | { type: "defaults"; host: string; defaults: Defaults; models: ModelChoice[]; efforts: string[];
+      shelf: ShelfItem[] }
   | { type: "err"; sid?: string; title: string; text?: string }
   | { type: "warn"; sid?: string; text: string };
 

@@ -166,7 +166,7 @@ button { font-family: inherit; }
    Drag onto a free hexagon to spawn there; badge cycles effort; click = default. */
 #hive-tray {
   position: fixed; right: 14px; bottom: 14px; z-index: 6;
-  display: flex; gap: 10px; align-items: flex-end;
+  display: flex; flex-direction: column; gap: 8px;
   background: var(--glass);
   border: 1px solid var(--hairline);
   border-radius: 10px;
@@ -175,6 +175,19 @@ button { font-family: inherit; }
   padding: 9px 12px;
   font: 12px var(--font);
 }
+#hive-tray .ht-models { display: flex; gap: 10px; align-items: flex-end; }
+/* the SHELF: saved specialists (hard-hat chips) — drag onto a hexagon to hire,
+   drag to the trash dock to remove from the shelf; a live one sits dimmed */
+#hive-tray .ht-shelf { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;
+  max-width: 420px; padding-bottom: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+.ht-duty .hb-hat { position: absolute; top: -7px; left: 50%; transform: translateX(-50%);
+  width: 18px; height: 9px; border-radius: 9px 9px 2px 2px;
+  background: linear-gradient(#ffd75e, #f4c430);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4); }
+.ht-duty .hb-hat::after { content: ""; position: absolute; left: -3px; right: -3px; bottom: -2px;
+  height: 3px; border-radius: 2px; background: #f4c430; }
+.ht-duty.live { opacity: 0.35; cursor: default; }
+.ht-duty .hb-eff { pointer-events: none; }   /* the cadence is a label here, not a control */
 .ht-bean { display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: grab;
   color: #c9c9c9; user-select: none; -webkit-user-select: none; padding: 2px 4px; border-radius: 6px; }
 .ht-bean.lifted { opacity: 0.35; }

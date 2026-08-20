@@ -56,7 +56,7 @@ net.on((m: ServerMsg) => {
       dock.setCaps(m.sid, m.commands);
       break;
     case "defaults":
-      tray.setChoices(m.models, m.efforts, m.defaults);
+      tray.setChoices(m.models, m.efforts, m.defaults, m.shelf);
       document.title = "hive @ " + m.host;
       badge.textContent = m.host;
       break;

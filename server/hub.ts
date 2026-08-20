@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { adoptGoal, adoptMode, adoptName, historyToEvents, pickAdoptable, pickRompAdoptable } from "./adopt";
 import { dutyDue, dutyLine, parseDutyCommand } from "./duty";
-import { fmtEvery, loadRoster, parseEvery, reconcileActions, saveRoster, type RosterEntry } from "./roster";
+import { fmtEvery, loadRoster, parseEvery, saveRoster } from "./roster";
 import { TranscriptMirror } from "./mirror";
 import { readRompRegistry } from "./romp";
 import { AgentSession } from "./session";
@@ -55,40 +55,34 @@ export class Hub {
     // actual state, so rounds never pile onto a running turn
     for (const d of this.store.allDuties()) this.duties.set(d.sid, { everyS: d.every_s, prompt: d.prompt, lastRunT: d.last_run_t });
     setInterval(() => this.dutyTick(), 30_000);
-    // …and the ROSTER (saved duties — duties.json): reconcile at boot and on a slow
-    // tick, so the standing crew the user always wants re-summons itself
-    setTimeout(() => this.reconcileRoster(), 3_000);
-    setInterval(() => this.reconcileRoster(), 600_000);
   }
 
-  private reconcileRoster() {
-    const roster = loadRoster();
-    if (!roster.size) return;
-    const live = [...this.sessions.values()].map((s) => {
-      const d = this.duties.get(s.sid);
-      return { name: s.name, everyS: d ? d.everyS : null, prompt: d ? d.prompt : null };
-    });
-    for (const a of reconcileActions(roster, live)) {
-      if (a.act === "summon") {
-        const s = this.create({
-          op: "create", name: a.name,
-          model: a.entry.model, effort: a.entry.effort, cwd: a.entry.cwd,
-        });
-        const everyS = parseEvery(a.entry.every)!;
-        this.duties.set(s.sid, { everyS, prompt: a.entry.prompt, lastRunT: Math.floor(Date.now() / 1000) });
-        this.store.setDuty(s.sid, everyS, a.entry.prompt, Math.floor(Date.now() / 1000));
-        s.note(`on duty (saved) — every ${a.entry.every}: ${a.entry.prompt.slice(0, 140)}${a.entry.prompt.length > 140 ? "…" : ""}`);
-        try { s.send(a.entry.prompt); } catch { /* first round retries on the tick */ }
-        console.log(`roster: summoned "${a.name}"`);
-      } else {
-        const s = [...this.sessions.values()].find((x) => x.name === a.name);
-        if (!s) continue;
-        this.duties.set(s.sid, { everyS: a.everyS, prompt: a.prompt, lastRunT: Math.floor(Date.now() / 1000) });
-        this.store.setDuty(s.sid, a.everyS, a.prompt, Math.floor(Date.now() / 1000));
-        s.note(`duty updated from the roster — every ${fmtEvery(a.everyS)}`);
-      }
+  // hire a shelf specialist — the duty tray's drag lands here. The shelf NEVER hires by
+  // itself: a specialist joins the board only through the user's own gesture.
+  summon(name: string): void {
+    const entry = loadRoster().get(name);
+    if (!entry) throw new Error(`no specialist named "${name}" on the shelf`);
+    if ([...this.sessions.values()].some((s) => s.name === name)) {
+      throw new Error(`"${name}" is already on the board`);
     }
+    const s = this.create({ op: "create", name, model: entry.model, effort: entry.effort, cwd: entry.cwd });
+    const everyS = parseEvery(entry.every)!;
+    const nowS = Math.floor(Date.now() / 1000);
+    this.duties.set(s.sid, { everyS, prompt: entry.prompt, lastRunT: nowS });
+    this.store.setDuty(s.sid, everyS, entry.prompt, nowS);
+    s.note(`hired from the shelf — every ${entry.every}: ${entry.prompt.slice(0, 140)}${entry.prompt.length > 140 ? "…" : ""}`);
+    try { s.send(entry.prompt); } catch { /* the first round retries on the tick */ }
+    this.publish("hive", this.defaultsMsg());
     this.publishHive();
+  }
+
+  // remove a specialist from the shelf for good (the shelf chip dragged to the trash);
+  // a live bean with that duty keeps running — this only empties the shelf slot
+  unsave(name: string): void {
+    const roster = loadRoster();
+    if (!roster.delete(name)) throw new Error(`no specialist named "${name}" on the shelf`);
+    saveRoster(roster);
+    this.publish("hive", this.defaultsMsg());
   }
 
   private duties = new Map<string, { everyS: number; prompt: string; lastRunT: number }>();
@@ -135,19 +129,20 @@ export class Hub {
           model: s.model, effort: s.effort, cwd: s.cwd,
         });
         saveRoster(roster);
-        s.note(`saved — "${s.name}" is now a standing duty: it re-summons itself at every boot (duties.json)`);
+        this.publish("hive", this.defaultsMsg());
+        s.note(`saved — "${s.name}" is on the shelf now: drag it from the tray whenever you want it (duties.json)`);
       }
     } else if (cmd.kind === "off") {
+      // stops THIS bean's loop; the shelf keeps the specialist (removal is the shelf
+      // chip's own trash gesture, or "unsave")
       const had = this.duties.delete(sid);
       this.store.delDuty(sid);
-      const roster = loadRoster();
-      const wasSaved = roster.delete(s.name);
-      if (wasSaved) saveRoster(roster);
-      s.note(had ? `off duty — the loop is retired${wasSaved ? ", roster entry removed" : ""}` : "this session had no duty");
+      const saved = loadRoster().has(s.name);
+      s.note(had ? `off duty — the loop is retired${saved ? " (still on the shelf)" : ""}` : "this session had no duty");
     } else if (cmd.kind === "status") {
       const d = this.duties.get(sid);
       const saved = d && loadRoster().has(s.name);
-      s.note(d ? dutyLine(d.everyS, d.lastRunT, nowS) + (saved ? " · saved" : " · not saved (/duty save)")
+      s.note(d ? dutyLine(d.everyS, d.lastRunT, nowS) + (saved ? " · on the shelf" : " · not saved (/duty save)")
                : 'no duty — set one with "/duty every 10m <the job>"');
     } else {
       s.note(cmd.message, "err");
@@ -319,10 +314,14 @@ export class Hub {
     // which machine's hive this is — two identical boards in two tabs are
     // indistinguishable without it (the user 2026-08-19, whose empty devbox board
     // read as their local beans having vanished)
+    const liveNames = new Set([...this.sessions.values()].map((s) => s.name));
+    const shelf = [...loadRoster()].map(([name, e]) => ({
+      name, every: e.every, ...(e.model ? { model: e.model } : {}), live: liveNames.has(name),
+    }));
     return JSON.stringify({
       type: "defaults", host: (process.env.HIVE_NAME || hostname()).replace(/\.local$/, ""),
       defaults: this.store.getDefaults(),
-      models: this.models, efforts: [...EFFORTS],
+      models: this.models, efforts: [...EFFORTS], shelf,
     } satisfies ServerMsg);
   }
 
@@ -374,12 +373,11 @@ export class Hub {
   end(sid: string) {
     const s = this.must(sid);
     s.end();
-    this.duties.delete(sid);       // trashing the bean IS retiring its job — roster included
-    this.store.delDuty(sid);
-    const roster = loadRoster();
-    if (roster.delete(s.name)) saveRoster(roster);
+    this.duties.delete(sid);       // trashing the bean dismisses the INSTANCE; the shelf
+    this.store.delDuty(sid);       // keeps the specialist for the next drag
     this.persist(sid);
     this.sessions.delete(sid);
+    this.publish("hive", this.defaultsMsg());   // its shelf chip lights back up as hireable
     this.publishHive();
   }
 
