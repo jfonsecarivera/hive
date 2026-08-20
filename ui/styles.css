@@ -484,6 +484,12 @@ button { font-family: inherit; }
   font: 11px/1.5 var(--mono); color: #a9b2bc; white-space: pre-wrap; word-break: break-word; }
 .t-body .t-out { color: #8f98a3; }
 
+/* an image the session read — inline in the tool row, outside the fold */
+.t-img { display: block; margin: 4px 8px 6px 22px; width: fit-content; max-width: calc(100% - 30px); }
+.t-img img { display: block; max-width: 100%; max-height: 240px; border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.09); background: #0d1117; }
+.t-img.gone { font: 11px var(--mono); color: var(--red-soft); cursor: default; text-decoration: none; }
+
 /* ask cards: the decision surface — big, obvious, answered in place */
 .m-ask {
   border: 1px solid rgba(229, 72, 77, 0.45);

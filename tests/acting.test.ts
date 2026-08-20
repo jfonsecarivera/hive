@@ -57,7 +57,7 @@ describe("workingPose — the typing must read as typing", () => {
 
 describe("the desk tableau — the keyboard is never IN the bean (the user, 2026-08-19)", () => {
   const nearEdge = DESK_Z - DESK_DEPTH / 2;
-  const screenZ = DESK_Z - SCREEN_OFF;        // the laptop screen's plane
+  const screenZ = DESK_Z + SCREEN_OFF;        // the laptop lid's plane, beyond the desk center
 
   test("working: belly, face and hard-hat all clear the desk at the deepest hunch", () => {
     const lean = WORK_LEAN + WORK_BOB;

@@ -1,5 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { parseTodos, toolPreview, toolTitle } from "../server/session";
+import { imagePath, parseTodos, servableImage, toolPreview, toolTitle } from "../server/session";
+
+describe("imagePath — a Read of an image shows in the chat", () => {
+  test("Read + image extension yields the absolute path; everything else stays bare", () => {
+    expect(imagePath("Read", { file_path: "/tmp/shot.png" }, "/w")).toBe("/tmp/shot.png");
+    expect(imagePath("Read", { file_path: "/a/photo.JPEG" }, "/w")).toBe("/a/photo.JPEG");
+    expect(imagePath("Read", { file_path: "/a/code.ts" }, "/w")).toBeUndefined();
+    expect(imagePath("Write", { file_path: "/a/shot.png" }, "/w")).toBeUndefined();
+    expect(imagePath("Read", {}, "/w")).toBeUndefined();
+  });
+
+  test("a relative path resolves against the session cwd; without one it stays bare", () => {
+    expect(imagePath("Read", { file_path: "out/plot.svg" }, "/home/me/proj/")).toBe("/home/me/proj/out/plot.svg");
+    expect(imagePath("Read", { file_path: "plot.svg" }, "")).toBeUndefined();   // mirrored history: no guessing
+  });
+
+  test("servableImage guards the /img endpoint: absolute + image extension only", () => {
+    expect(servableImage("/tmp/a.webp")).toBe(true);
+    expect(servableImage("tmp/a.webp")).toBe(false);
+    expect(servableImage("/etc/passwd")).toBe(false);
+  });
+});
 
 describe("toolTitle", () => {
   test("names the common tools by their salient argument", () => {

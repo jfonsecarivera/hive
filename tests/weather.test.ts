@@ -46,7 +46,14 @@ describe("parseMeteo — the Open-Meteo reply becomes the wire record or nothing
     },
   };
 
-  test("a full reply parses, sun times ordered, code verbatim", () => {
+  test("unixtime sun fields (the format we request) pass through as epochs", () => {
+    const uni = { current: reply.current, daily: { sunrise: [1787146020, 1787232480], sunset: [1787194500, 1787280840] } };
+    const w = parseMeteo(uni, NOW, "berlin")!;
+    expect(w.rises).toEqual([1787146020, 1787232480]);
+    expect(w.sets[1]).toBe(1787280840);
+  });
+
+  test("a full ISO reply parses too (fallback), sun times ordered, code verbatim", () => {
     const w = parseMeteo(reply, NOW, "berlin")!;
     expect(w).not.toBeNull();
     expect(w.code).toBe(61);

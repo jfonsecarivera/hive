@@ -17,7 +17,8 @@ export const DESK_W = 1.1;        // tabletop width — furniture FOR this creat
 export const DESK_DEPTH = 0.4;    // tabletop depth — near edge at DESK_Z - DESK_DEPTH/2
 export const DESK_TOP_Y = 0.62;   // tabletop height: ABOVE the belly's widest ring, so the
                                   // bean narrows where the desk crosses it (slab ±0.025)
-export const SCREEN_OFF = 0.145;  // laptop screen's local z on the desk — plane at DESK_Z - SCREEN_OFF
+export const SCREEN_OFF = 0.145;  // laptop lid's offset BEYOND the desk center — plane at DESK_Z + SCREEN_OFF,
+                                  // rising at the far edge with the keys on the bean's side
 export const WORK_LEAN = 0.12;    // typing hunch…
 export const WORK_BOB = 0.02;     //   …plus the bob riding the beat
 // The blocked slump stays SHALLOW on purpose: a deep fold puts the visor on the desk-edge

@@ -73,14 +73,16 @@ export class Hub {
     if ([...this.sessions.values()].some((s) => s.name === name)) {
       throw new Error(`"${name}" is already on the board`);
     }
-    const s = this.create({ op: "create", name, model: entry.model, effort: entry.effort, cwd: entry.cwd });
     const selfPaced = entry.every === "self";
+    // the first round IS the birth prompt: the specialist is working from its first
+    // breath, so create()'s queue drain can never poach it before its duty registers
+    const s = this.create({ op: "create", name, model: entry.model, effort: entry.effort, cwd: entry.cwd,
+      prompt: roundText(entry.prompt, selfPaced) });
     const everyS = selfPaced ? SELF_PACED_FALLBACK_S : parseEvery(entry.every)!;
     const nowS = Math.floor(Date.now() / 1000);
     this.duties.set(s.sid, { everyS, prompt: entry.prompt, lastRunT: nowS, selfPaced });
     this.store.setDuty(s.sid, everyS, entry.prompt, nowS, selfPaced);
     s.note(`hired from the shelf — ${selfPaced ? "self-paced" : "every " + entry.every}: ${entry.prompt.slice(0, 140)}${entry.prompt.length > 140 ? "…" : ""}`);
-    try { s.send(roundText(entry.prompt, selfPaced)); } catch { /* the first round retries on the tick */ }
     this.publish("hive", this.defaultsMsg());
     this.publishHive();
   }
@@ -502,6 +504,9 @@ export class Hub {
     this.persist(s.sid);
     this.publishHive();
     s.start(op.prompt);
+    // a bean joining the board is an event: born idle, it hatches straight into the
+    // backlog (born with a prompt it's already working, and the drain skips it)
+    this.drainQueue();
     return s;
   }
 

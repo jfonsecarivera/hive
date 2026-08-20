@@ -29,9 +29,10 @@ export function parseGeo(j: unknown): GeoLoc | null {
   return { lat, lon, place };
 }
 
-// Open-Meteo current + daily → the wire record. Daily sunrise/sunset arrive as LOCAL
-// ISO strings (timezone=auto); hive's server runs on the user's own machine, so Date
-// parses them in exactly the right zone.
+// Open-Meteo current + daily → the wire record. Sunrise/sunset are requested as
+// timeformat=unixtime (epoch numbers) so the math is timezone-independent — hive's
+// server may run on a remote box in a different zone than the sky it's describing
+// (the devbox, 2026-08-19). Local-ISO strings are still accepted as a fallback.
 export function parseMeteo(j: unknown, nowS: number, place: string): Weather | null {
   const o = j as { current?: Record<string, unknown>; daily?: Record<string, unknown> } | null;
   const c = o?.current, d = o?.daily;
@@ -40,6 +41,7 @@ export function parseMeteo(j: unknown, nowS: number, place: string): Weather | n
   const cloud = Number(c.cloud_cover), windKmh = Number(c.wind_speed_10m);
   if (![code, tempC, cloud, windKmh].every(Number.isFinite)) return null;
   const toS = (s: unknown) => {
+    if (typeof s === "number" && Number.isFinite(s)) return Math.floor(s);
     const t = typeof s === "string" ? new Date(s).getTime() : NaN;
     return Number.isFinite(t) ? Math.floor(t / 1000) : null;
   };
@@ -55,7 +57,7 @@ const GEO_URLS = ["https://ipapi.co/json/", "https://ipwho.is/"];
 const meteoUrl = (g: GeoLoc) =>
   `https://api.open-meteo.com/v1/forecast?latitude=${g.lat}&longitude=${g.lon}` +
   "&current=temperature_2m,weather_code,cloud_cover,wind_speed_10m,is_day" +
-  "&daily=sunrise,sunset&timezone=auto&forecast_days=2";
+  "&daily=sunrise,sunset&timezone=auto&timeformat=unixtime&forecast_days=2";
 
 async function locate(kv: Kv): Promise<GeoLoc | null> {
   const pinned = parseLatLon(process.env.HIVE_LATLON);

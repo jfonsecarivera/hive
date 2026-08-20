@@ -470,10 +470,12 @@ export class AgentSession {
               this.todos = parseTodos(block.input);
               this.onChange(this.sid);
             }
+            const img = imagePath(block.name, block.input || {}, this.cwd);
             const ev: Extract<ChatEvent, { k: "tool" }> = {
               k: "tool", id: block.id, t: now(), name: block.name,
               title: toolTitle(block.name, block.input || {}),
               input: clip(pretty(block.input), INPUT_CAP), status: "run",
+              ...(img ? { img } : {}),
             };
             this.toolEvents.set(block.id, ev);
             this.emit(ev);
@@ -874,6 +876,25 @@ function resultText(content: unknown): string {
 function firstLine(s: string, cap = 90): string {
   const l = (s || "").trim().split("\n")[0];
   return l.length > cap ? l.slice(0, cap - 1) + "…" : l;
+}
+
+// A Read of an image is worth SHOWING, not describing. The tool event carries the
+// absolute path only — the UI asks /img for the pixels on demand, so the store and the
+// wire never swallow base64 (clip() already redacts blobs for the same reason).
+const IMG_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i;
+
+export function servableImage(p: string): boolean {
+  return p.startsWith("/") && IMG_EXT.test(p);
+}
+
+// cwd resolves a relative Read; pass "" where the cwd is unknown (mirrored history) —
+// a relative path there stays undecorated rather than guessing
+export function imagePath(name: string, input: Record<string, any>, cwd: string): string | undefined {
+  if (name !== "Read") return undefined;
+  const p = String(input?.file_path || input?.path || "");
+  if (!p || !IMG_EXT.test(p)) return undefined;
+  const abs = p.startsWith("/") ? p : cwd ? cwd.replace(/\/+$/, "") + "/" + p : "";
+  return servableImage(abs) ? abs : undefined;
 }
 
 export function toolTitle(name: string, input: Record<string, any>): string {

@@ -636,12 +636,18 @@ class Dweller {
     this.screenMat = new THREE.MeshStandardMaterial({
       color: 0x10151c, roughness: 0.3, emissive: 0x9fd8ff, emissiveIntensity: 0.9,
     });
-    const screen = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.34, 0.015), this.screenMat);
+    // the laptop faces its OWNER (the user, 2026-08-19: it shipped backwards): keys on the
+    // bean's side, lid rising at the FAR edge and tilting away. Only the -z face — the one
+    // the bean actually reads — is the emissive screen; the lid's back is dark shell, so
+    // from across the desk you see a dark lid with the glow spilling around it.
+    const screen = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.34, 0.015),
+      [shell, shell, shell, shell, shell, this.screenMat],
+    );
     screen.position.set(0, DESK_TOP_Y + 0.19, SCREEN_OFF);
-    screen.rotation.x = -0.24;
+    screen.rotation.x = 0.24;
     this.desk.add(base, screen);
     this.desk.position.set(0, 0, DESK_Z);
-    this.desk.rotation.y = Math.PI;         // screen faces the bean
     this.desk.visible = false;
     this.group.add(this.desk);
 

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { cookieHeader, peek, verdict } from "./auth";
 import { buildUi, ROOT } from "./build";
 import { Hub } from "./hub";
+import { servableImage } from "./session";
 import { EFFORTS, type ClientOp, type ServerMsg } from "./proto";
 import { startWeather } from "./weather";
 
@@ -70,6 +71,17 @@ const server = Bun.serve<WsData>({
     if (url.pathname.startsWith("/dist/")) {
       const f = Bun.file(join(ROOT, "dist", url.pathname.slice(6)));
       return finish((await f.exists()) ? new Response(f, { headers: fresh }) : new Response("not found", { status: 404 }));
+    }
+    if (url.pathname === "/img") {
+      // an image a session Read, shown in its chat. Absolute path + image extension
+      // only; the token gate above is the trust boundary (single-user app — the same
+      // gate already exposes every chat and the power to drive sessions). CSP sandbox
+      // keeps a directly-opened SVG inert.
+      const p = url.searchParams.get("p") || "";
+      if (!servableImage(p)) return new Response("not an image path", { status: 400 });
+      const f = Bun.file(p);
+      if (!(await f.exists())) return new Response("image not found", { status: 404 });
+      return finish(new Response(f, { headers: { "Cache-Control": "no-cache", "Content-Security-Policy": "sandbox" } }));
     }
     if (url.pathname === "/models") {
       const d = hub.store.getDefaults();

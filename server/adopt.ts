@@ -6,7 +6,7 @@
 // hive never elbows into a session some other process might be driving right now.
 import { basename } from "node:path";
 import type { SDKSessionInfo, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { toolTitle } from "./session";
+import { imagePath, toolTitle } from "./session";
 import type { ChatEvent } from "./proto";
 
 export interface AdoptRules {
@@ -143,11 +143,14 @@ export function historyToEvents(
       } else if (b?.type === "thinking" && typeof b.thinking === "string" && b.thinking.trim()) {
         out.push({ k: "think", id, t, text: b.thinking.trim().slice(0, 8000), done: true });
       } else if (b?.type === "tool_use" && typeof b.id === "string") {
+        // no cwd here — only an absolute image path decorates (imagePath guards)
+        const img = imagePath(String(b.name || "tool"), b.input || {}, "");
         const ev: Extract<ChatEvent, { k: "tool" }> = {
           k: "tool", id: "h-" + b.id, t, name: String(b.name || "tool"),
           title: toolTitle(String(b.name || "tool"), b.input || {}),
           input: histClip(pretty(b.input), 2000),
           status: "ok",                       // history: assume completed unless the result says otherwise
+          ...(img ? { img } : {}),
         };
         tools.set(b.id, ev);
         out.push(ev);

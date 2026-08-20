@@ -39,6 +39,10 @@ describe("pickWorker", () => {
     ])).toBe("c");
   });
 
+  test("a fresh OPENING bean hatches straight into the backlog", () => {
+    expect(pickWorker([w({ sid: "new", state: "opening" })])).toBe("new");
+  });
+
   test("duty, adopted, steering, awaiting, blocked, awaitingBg are never fed", () => {
     expect(pickWorker([
       w({ sid: "d", duty: true }),

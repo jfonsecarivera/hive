@@ -33,10 +33,13 @@ export function splitTasks(rest: string): string[] {
   return [rest];
 }
 
-// Who takes the front of the queue: a READY bean only — never awaiting (a question for
-// the user outranks the backlog), blocked (new work would bury its own failure), or
-// mid-anything — with no standing duty, not adopted, and not holding a steer (the
-// user's redirect outranks the queue). Longest idle goes first.
+// Who takes the front of the queue: a READY bean, or an OPENING one — "opening" is a
+// fresh bean with no work yet by construction (a prompt at birth flips it straight to
+// working), and its client doesn't even spawn until a first message arrives, so a
+// dragged-but-silent bean would otherwise never hatch into the backlog. Never awaiting
+// (a question for the user outranks the backlog), blocked (new work would bury its own
+// failure), or mid-anything — and no standing duty, not adopted, not holding a steer
+// (the user's redirect outranks the queue). Longest idle goes first.
 export interface WorkerView {
   sid: string;
   state: string;
@@ -49,7 +52,7 @@ export interface WorkerView {
 export function pickWorker(ws: WorkerView[]): string | null {
   let best: WorkerView | null = null;
   for (const w of ws) {
-    if (w.state !== "ready" || w.duty || w.adopted || w.steering) continue;
+    if ((w.state !== "ready" && w.state !== "opening") || w.duty || w.adopted || w.steering) continue;
     if (!best || w.lastT < best.lastT) best = w;
   }
   return best ? best.sid : null;

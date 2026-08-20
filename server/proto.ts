@@ -58,7 +58,9 @@ export type ChatEvent =
   | { k: "text"; id: string; t: number; text: string; done: boolean }
   | { k: "think"; id: string; t: number; text: string; done: boolean }
   | { k: "tool"; id: string; t: number; name: string; title: string;
-      input?: string; output?: string; status: "run" | "ok" | "err"; elapsed?: number }
+      input?: string; output?: string; status: "run" | "ok" | "err"; elapsed?: number;
+      img?: string }   // absolute path of an image this tool read — the UI shows it via /img
+
   | { k: "ask"; id: string; t: number; kind: "perm" | "question";
       title: string; subtitle?: string;
       preview?: { kind: "diff" | "plan"; text: string };

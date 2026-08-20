@@ -465,6 +465,28 @@ export class ChatDock {
       outEl.textContent = ev.output || "(no output)";
       outEl.hidden = false;
     }
+    // an image the session read renders INLINE, outside the fold — that's the point;
+    // a vanished file says so explicitly instead of leaving a broken-image glyph
+    if (ev.img && ev.status === "ok" && !el.querySelector(".t-img")) {
+      const src = "/img?p=" + encodeURIComponent(ev.img);
+      const a = document.createElement("a");
+      a.className = "t-img";
+      a.href = src;
+      a.target = "_blank";
+      a.rel = "noopener";
+      const im = document.createElement("img");
+      im.loading = "lazy";
+      im.alt = ev.img.split("/").pop() || "image";
+      im.src = src;
+      im.addEventListener("load", () => this.queueScroll());   // late height must not unpin the feed
+      im.addEventListener("error", () => {
+        a.classList.add("gone");
+        a.textContent = "image unavailable — " + ev.img;
+        a.removeAttribute("href");
+      });
+      a.appendChild(im);
+      el.appendChild(a);
+    }
   }
 
   // ── ask cards: permissions and questions, answered right in the flow ───────────
