@@ -5,7 +5,8 @@ import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { adoptGoal, adoptMode, adoptName, historyToEvents, pickAdoptable, pickRompAdoptable } from "./adopt";
-import { dutyDue, dutyLine, paceLastRun, parseDutyCommand, roundText, SELF_PACED_FALLBACK_S, stripLoopPrefix } from "./duty";
+import { cheerLine, cheerTargets, dutyDue, dutyLine, paceLastRun, parseDutyCommand, roundText, SELF_PACED_FALLBACK_S, stripLoopPrefix } from "./duty";
+import { parseQueueCommand, pickWorker, queueStatus } from "./queue";
 import { fmtEvery, loadRoster, parseEvery, saveRoster } from "./roster";
 import { TranscriptMirror } from "./mirror";
 import { readRompRegistry } from "./romp";
@@ -38,6 +39,7 @@ export class Hub {
       const s = new AgentSession({
         sid: row.sid, name: row.name, color: { bg: row.color_bg, fg: row.color_fg },
         model: row.model, effort: row.effort, permMode: row.perm_mode, cwd: row.cwd,
+        origin: row.origin,
         claudeSessionId: row.claude_session_id, createdT: row.created_t, lastT: row.last_t,
         doneT: row.done_t, goal: row.goal, topIds: parse(row.top_ids), doneTopIds: parse(row.done_top_ids),
         cost: row.cost,
@@ -58,6 +60,9 @@ export class Hub {
     // actual state, so rounds never pile onto a running turn
     for (const d of this.store.allDuties()) this.duties.set(d.sid, { everyS: d.every_s, prompt: d.prompt, lastRunT: d.last_run_t, selfPaced: !!d.self_paced });
     setInterval(() => this.dutyTick(), 30_000);
+    // the cheer engine: encouragement QUEUED (never interrupting) to whoever is grinding
+    const cheerS = Number(process.env.HIVE_CHEER_S ?? 1800);
+    if (cheerS > 0) setInterval(() => this.cheer(), cheerS * 1000);
   }
 
   // hire a shelf specialist — the duty tray's drag lands here. The shelf NEVER hires by
@@ -91,6 +96,22 @@ export class Hub {
 
   private duties = new Map<string, { everyS: number; prompt: string; lastRunT: number; selfPaced: boolean }>();
   private notifySent = new Map<string, number[]>();   // per-session notify timestamps (spam guard)
+  private lastState = new Map<string, string>();      // per-session previous state — the queue drains on the ready TRANSITION
+  private cheerRound = 0;
+
+  private cheer() {
+    const states = [...this.sessions.values()].map((s) => ({ sid: s.sid, state: s.stateNow() }));
+    const targets = cheerTargets(states, process.env.HIVE_CHEER_ALL === "1");
+    if (!targets.length) return;
+    const line = cheerLine(this.cheerRound++);
+    for (const sid of targets) {
+      const s = this.sessions.get(sid);
+      // a mirrored session is being driven by SOMETHING ELSE — cheering it would start
+      // our own client on their conversation; not ours to talk in
+      if (!s || (!s.driving() && s.mirrorBusy)) continue;
+      try { s.queueMessage(line); } catch { /* a dying client gets the next round's cheer */ }
+    }
+  }
 
   private dutyTick() {
     const nowS = Math.floor(Date.now() / 1000);
@@ -163,6 +184,48 @@ export class Hub {
     this.persist(sid);
     this.publishHive();
     return true;
+  }
+
+  // the /queue composer command — the user's backlog, drained by idle beans (queue.ts)
+  queueCommand(sid: string, text: string): boolean {
+    const cmd = parseQueueCommand(text);
+    if (!cmd) return false;
+    const s = this.must(sid);
+    if (cmd.kind === "add") {
+      const nowS = Math.floor(Date.now() / 1000);
+      for (const task of cmd.tasks) this.store.enqueue(task, nowS);
+      const n = this.store.queuedTasks().length;
+      s.note(cmd.tasks.length === 1
+        ? `queued (#${n} in line) — the next bean to go idle takes the front`
+        : `queued ${cmd.tasks.length} tasks (${n} in line)`);
+      this.drainQueue();
+    } else if (cmd.kind === "clear") {
+      const n = this.store.clearQueue();
+      s.note(n ? `queue cleared — ${n} task${n === 1 ? "" : "s"} dropped` : "the queue was already empty");
+    } else {
+      s.note(queueStatus(this.store.queuedTasks()));
+    }
+    return true;
+  }
+
+  // hand the front of the queue to ready beans, one task each — send flips the taker to
+  // working, so the loop stops on its own when either side runs dry. Called on the
+  // state-change to ready and on enqueue; NEVER on a timer (events over heuristics).
+  private drainQueue() {
+    for (;;) {
+      const item = this.store.nextQueued();
+      if (!item) return;
+      const sid = pickWorker([...this.sessions.values()].map((s) => ({
+        sid: s.sid, state: s.stateNow(), duty: this.duties.has(s.sid),
+        adopted: s.origin === "adopted", steering: s.steering(), lastT: s.lastT,
+      })));
+      if (!sid) return;
+      const s = this.sessions.get(sid)!;
+      try { s.send(item.task); } catch { return; }   // a dying taker keeps the task queued
+      this.store.delQueued(item.id);
+      const left = this.store.queuedTasks().length;
+      s.note(left ? `from the queue — ${left} more waiting` : "from the queue — that was the last one");
+    }
   }
 
   // what the hive MCP tools see and do — every session gets these (tools.ts)
@@ -277,6 +340,7 @@ export class Hub {
         effort: r?.effort || d.effort,
         permMode: r?.permMode || d.permMode,
         cwd: r?.cwd || info.cwd || process.env.HOME || process.cwd(),
+        origin: "adopted",
         claudeSessionId: info.sessionId,
         createdT: r?.spawnedAt || Math.floor((info.createdAt || info.lastModified) / 1000),
         lastT: Math.floor(info.lastModified / 1000),
@@ -313,6 +377,12 @@ export class Hub {
     s.onChange = (sid) => {
       this.persist(sid);
       this.scheduleHive();
+      // the queue drains on the state-change EVENT, never a timer: the moment a bean
+      // lands on ready it takes the front of the backlog
+      const st = s.stateNow();
+      const was = this.lastState.get(sid);
+      this.lastState.set(sid, st);
+      if (st === "ready" && was !== "ready") this.drainQueue();
     };
     s.onCaps = (sid) => {
       this.publish(`chat:${sid}`, this.capsMsg(sid));
@@ -342,10 +412,13 @@ export class Hub {
   capsMsg(sid: string): string {
     const s = this.sessions.get(sid);
     // hive's own composer commands ride the same menu as the session's slash commands
-    const builtins = [{ name: "/loop", description: "run this session's job on a loop (hive — survives restarts, shows on the board)", argumentHint: "<job> (self-paced) · every 10m <job> · save · off" }];
-    // hive intercepts /loop and /duty, so the CLI's own entries for them would be dead
-    // menu rows — hive's wins
-    const cmds = s ? s.commands.filter((c) => !/^\/?(loop|duty)$/.test(c.name)) : [];
+    const builtins = [
+      { name: "/loop", description: "run this session's job on a loop (hive — survives restarts, shows on the board)", argumentHint: "<job> (self-paced) · every 10m <job> · save · off" },
+      { name: "/queue", description: "file a task on the shared backlog — the next idle bean takes it (hive — survives restarts)", argumentHint: "<task> · clear · (bare) shows the line" },
+    ];
+    // hive intercepts /loop, /duty and /queue, so the CLI's own entries for them would
+    // be dead menu rows — hive's win
+    const cmds = s ? s.commands.filter((c) => !/^\/?(loop|duty|queue)$/.test(c.name)) : [];
     return JSON.stringify({ type: "caps", sid, commands: s ? [...builtins, ...cmds] : [] } satisfies ServerMsg);
   }
 
@@ -362,6 +435,7 @@ export class Hub {
       claude_session_id: s.claudeSessionId, created_t: s.createdT, last_t: s.lastT,
       done_t: s.doneT, goal: s.goal, top_ids: JSON.stringify(s.topIds),
       done_top_ids: JSON.stringify(s.doneTopIds), cost: s.cost(), archived: s.ended ? 1 : 0,
+      origin: s.origin,
     };
   }
 
@@ -445,6 +519,7 @@ export class Hub {
     this.store.delDuty(sid);       // keeps the specialist for the next drag
     this.persist(sid);
     this.sessions.delete(sid);
+    this.lastState.delete(sid);
     this.publish("hive", this.defaultsMsg());   // its shelf chip lights back up as hireable
     this.publishHive();
   }

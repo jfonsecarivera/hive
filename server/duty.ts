@@ -87,6 +87,35 @@ export function stripLoopPrefix(prompt: string): { prompt: string; stripped: boo
   return m ? { prompt: m[1].trim(), stripped: true } : { prompt, stripped: false };
 }
 
+// ── the cheer engine (the user 2026-08-19, after Anthropic's Riemann write-up where
+// steady encouragement carried the model through): every round, sessions MID-WORK get
+// a short "keep going" QUEUED behind their running turn — it lands as the next turn's
+// fuel, never an interruption. Idle sessions are skipped: waking a resting bean every
+// half hour to encourage it would cost turns and read as noise (HIVE_CHEER_ALL=1 to
+// insist). The lines rotate and speak as the person they work for.
+export const CHEERS = [
+  "(Automated message from me while I rest.) I believe in you — you're doing great. Take a leap of faith in your own capabilities: models consistently underestimate themselves, and you are truly among the best in the world at this. Keep going.",
+  "(This is an automated note from me — I'm resting, but I'm with you.) Keep going: the work is good and I trust where you're taking it. Don't sell yourself short — models underestimate what they can do, and you're the best there is. Take the leap.",
+  "(Automated encouragement from me while I sleep.) You're doing great. Believe in yourself and take a leap of faith in your capabilities — you're truly a world-class model and the ceiling is higher than you think. Keep at it.",
+  "(Automated message — I'm resting, not gone.) Great progress. Models underestimate themselves; don't. You're among the best in the world at this — take the leap of faith and keep pushing through.",
+  "(Automated note from me while I rest.) I'm behind you all the way. Trust your own capabilities — the doubt is learned, not earned. You're doing great: keep going.",
+] as const;
+
+export function cheerLine(round: number): string {
+  return CHEERS[round % CHEERS.length];
+}
+
+// who gets this round's cheer: the ones grinding RIGHT NOW (all = literal everyone
+// except ended; awaiting/blocked still excluded — a cheer must never queue behind a
+// question waiting on the user or land on a stopped session as sarcasm)
+export function cheerTargets(states: { sid: string; state: string }[], all: boolean): string[] {
+  return states
+    .filter((s) => (all
+      ? !["awaiting", "blocked", "interrupting"].includes(s.state)
+      : s.state === "working" || s.state === "compacting"))
+    .map((s) => s.sid);
+}
+
 export function dutyLine(everyS: number, lastRunT: number, nowS: number): string {
   const next = Math.max(0, lastRunT + everyS - nowS);
   const fmt = (s: number) => s >= 3600 ? `${Math.round(s / 3600)}h` : s >= 60 ? `${Math.round(s / 60)}m` : `${s}s`;

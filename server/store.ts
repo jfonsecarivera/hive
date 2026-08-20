@@ -24,6 +24,7 @@ export interface SessionRow {
   done_top_ids: string;
   cost: number;
   archived: number;
+  origin: string;                 // "hive" (dragged/summoned) | "adopted" — the queue feeds only hive-born beans
 }
 
 export class Store {
@@ -55,9 +56,18 @@ export class Store {
     `);
     try { this.db.exec("ALTER TABLE duties ADD COLUMN self_paced INTEGER DEFAULT 0"); }
     catch { /* column already there */ }
+    try {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN origin TEXT DEFAULT 'hive'");
+      // pre-migration adopted beans are recognizable by their adoption note (adopt()
+      // stamps every one with the fixed event id "adopted")
+      this.db.exec("UPDATE sessions SET origin='adopted' WHERE sid IN (SELECT DISTINCT sid FROM chat WHERE id='adopted')");
+    } catch { /* column already there */ }
     this.db.exec(`CREATE TABLE IF NOT EXISTS etas(
       name TEXT PRIMARY KEY, gist TEXT, task TEXT, eta_text TEXT, eta_iso TEXT,
       conf TEXT, status TEXT, detail TEXT, milestone TEXT, updated_t INTEGER
+    );`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS queue(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT NOT NULL, created_t INTEGER
     );`);
     this.seq = (this.db.query("SELECT COALESCE(MAX(seq),0) AS m FROM chat").get() as any).m;
   }
@@ -65,20 +75,20 @@ export class Store {
   upsertSession(r: SessionRow) {
     this.db.query(`
       INSERT INTO sessions(sid,name,color_bg,color_fg,model,effort,perm_mode,cwd,
-        claude_session_id,created_t,last_t,done_t,goal,top_ids,done_top_ids,cost,archived)
+        claude_session_id,created_t,last_t,done_t,goal,top_ids,done_top_ids,cost,archived,origin)
       VALUES($sid,$name,$color_bg,$color_fg,$model,$effort,$perm_mode,$cwd,
-        $claude_session_id,$created_t,$last_t,$done_t,$goal,$top_ids,$done_top_ids,$cost,$archived)
+        $claude_session_id,$created_t,$last_t,$done_t,$goal,$top_ids,$done_top_ids,$cost,$archived,$origin)
       ON CONFLICT(sid) DO UPDATE SET
         name=$name, color_bg=$color_bg, color_fg=$color_fg, model=$model, effort=$effort,
         perm_mode=$perm_mode, cwd=$cwd, claude_session_id=$claude_session_id,
         last_t=$last_t, done_t=$done_t, goal=$goal, top_ids=$top_ids,
-        done_top_ids=$done_top_ids, cost=$cost, archived=$archived
+        done_top_ids=$done_top_ids, cost=$cost, archived=$archived, origin=$origin
     `).run({
       $sid: r.sid, $name: r.name, $color_bg: r.color_bg, $color_fg: r.color_fg,
       $model: r.model, $effort: r.effort, $perm_mode: r.perm_mode, $cwd: r.cwd,
       $claude_session_id: r.claude_session_id, $created_t: r.created_t, $last_t: r.last_t,
       $done_t: r.done_t, $goal: r.goal, $top_ids: r.top_ids, $done_top_ids: r.done_top_ids,
-      $cost: r.cost, $archived: r.archived,
+      $cost: r.cost, $archived: r.archived, $origin: r.origin,
     });
   }
 
@@ -153,6 +163,31 @@ export class Store {
     eta_iso: string | null; conf: string | null; status: string | null; detail: string | null;
     milestone: string | null; updated_t: number }[] {
     return this.db.query("SELECT * FROM etas ORDER BY name").all() as any;
+  }
+
+  // ── the work queue: the user's backlog, FIFO — a ready bean takes the front (queue.ts)
+  enqueue(task: string, nowT: number) {
+    this.db.query("INSERT INTO queue(task, created_t) VALUES($task,$t)").run({ $task: task, $t: nowT });
+  }
+
+  nextQueued(): { id: number; task: string } | null {
+    return this.db.query("SELECT id, task FROM queue ORDER BY id LIMIT 1")
+      .get() as { id: number; task: string } | null;
+  }
+
+  delQueued(id: number) {
+    this.db.query("DELETE FROM queue WHERE id = $id").run({ $id: id });
+  }
+
+  queuedTasks(): string[] {
+    const rows = this.db.query("SELECT task FROM queue ORDER BY id").all() as { task: string }[];
+    return rows.map((r) => r.task);
+  }
+
+  clearQueue(): number {
+    const n = (this.db.query("SELECT COUNT(*) AS n FROM queue").get() as { n: number }).n;
+    this.db.query("DELETE FROM queue").run();
+    return n;
   }
 
   kvGet(k: string): string | null {

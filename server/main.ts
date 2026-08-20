@@ -7,11 +7,13 @@ import { cookieHeader, peek, verdict } from "./auth";
 import { buildUi, ROOT } from "./build";
 import { Hub } from "./hub";
 import { EFFORTS, type ClientOp, type ServerMsg } from "./proto";
+import { startWeather } from "./weather";
 
 const PORT = Number(process.env.HIVE_PORT || 4483);
 
 await buildUi();
 const hub = new Hub();
+let skyMsg: string | null = null;   // the latest weather reading, retained for new sockets
 
 interface WsData { watching: Set<string> }
 
@@ -90,6 +92,7 @@ const server = Bun.serve<WsData>({
       ws.send(hub.defaultsMsg());
       ws.send(hub.hiveMsg());
       ws.send(hub.etasMsg());
+      if (skyMsg) ws.send(skyMsg);
     },
     message(ws, raw) {
       let op: ClientOp;
@@ -113,6 +116,16 @@ const server = Bun.serve<WsData>({
 
 hub.publish = (topic, data) => { server.publish(topic, data); };
 
+// the sky: real weather over the user's head, fanned out like any other topic. Ambience
+// only — a failed fetch means the board keeps its classic night, loudly logged, and
+// HIVE_WEATHER=0 turns the whole loop off.
+if (process.env.HIVE_WEATHER !== "0") {
+  startWeather(hub.store, (w) => {
+    skyMsg = JSON.stringify({ type: "weather", w } satisfies ServerMsg);
+    server.publish("hive", skyMsg);
+  });
+}
+
 function err(text: string, sid?: string): string {
   return JSON.stringify({ type: "err", sid, title: text } satisfies ServerMsg);
 }
@@ -124,8 +137,9 @@ function handle(ws: Bun.ServerWebSocket<WsData>, op: ClientOp) {
       break;
     }
     case "send":
-      // hive's own composer commands (e.g. /duty) are handled here, never sent to the model
+      // hive's own composer commands (/loop, /queue) are handled here, never sent to the model
       if (hub.dutyCommand(op.sid, op.text)) break;
+      if (hub.queueCommand(op.sid, op.text)) break;
       hub.must(op.sid).send(op.text);
       break;
     case "interrupt":

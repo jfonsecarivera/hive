@@ -60,6 +60,9 @@ net.on((m: ServerMsg) => {
       document.title = "hive @ " + m.host;
       badge.textContent = m.host;
       break;
+    case "weather":
+      world.setWeather(m.w);
+      break;
     case "err":
       if (world.card.sid && (!m.sid || m.sid === world.card.sid)) {
         world.card.error(m.title, m.text || "");

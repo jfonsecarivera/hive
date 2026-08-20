@@ -15,7 +15,8 @@ import { delegate } from "./actions";
 import { assignSlots, axialToXZ, frameDt, frameRadius, HEX_SIZE, hexCorner, hexDistance, latticeSegments, PAD_R, PAD_THETA, RIM_THETA, ringOf, slotOfAxial, spiralSlot, xzToAxial } from "./hive-layout";
 import { diffSessions, finishedLine, foldEnding, foldSeenAsk, foldSeenDone, hiveAge, isFaded, isKnownState, stateLine, type HiveSession, type SeenDone } from "./hive-model";
 import { backOut, cycleBeat, popOut, springVel } from "./motion";
-import type { ClientOp, Defaults, ModelChoice, ShelfItem } from "../server/proto";
+import { skyLook, sunPhase, weatherGlyph, weatherKind } from "./sky-model";
+import type { ClientOp, Defaults, ModelChoice, ShelfItem, Weather } from "../server/proto";
 
 // what the world needs from the page around it — the whole outside contract
 export interface Bridge {
@@ -1046,6 +1047,118 @@ class Particles {
   }
 }
 
+// ── precipitation: the weather's fall layer. Rain is short additive streaks, snow is
+// drifting points, both recycled through a cylinder around the camera target — fixed
+// pools, zero per-frame allocation; intensity only changes how many drops are ALIVE,
+// so a shower eases in and out instead of popping. ───────────────────────────────────────
+const RAIN_MAX = 240, SNOW_MAX = 200;
+const PRECIP_R = 15, PRECIP_TOP = 8.5;
+class Precip {
+  group = new THREE.Group();
+  private rainGeo = new THREE.BufferGeometry();
+  private rainPos = new Float32Array(RAIN_MAX * 6);   // two verts per streak
+  private rd = new Float32Array(RAIN_MAX * 5);        // per drop: x,y,z,vy,vx
+  private rainN = 0;
+  private snowGeo = new THREE.BufferGeometry();
+  private snowPos = new Float32Array(SNOW_MAX * 3);
+  private sd = new Float32Array(SNOW_MAX * 5);        // per flake: x,y,z,vy,sway-phase
+  private snowN = 0;
+  private t = 0;
+
+  constructor() {
+    this.rainGeo.setAttribute("position", new THREE.BufferAttribute(this.rainPos, 3));
+    this.rainGeo.setDrawRange(0, 0);
+    const rain = new THREE.LineSegments(this.rainGeo, new THREE.LineBasicMaterial({
+      color: 0x7e95b8, transparent: true, opacity: 0.4,
+      blending: THREE.AdditiveBlending, depthWrite: false,   // rain that glows — it's TRON rain
+    }));
+    rain.frustumCulled = false;
+    this.snowGeo.setAttribute("position", new THREE.BufferAttribute(this.snowPos, 3));
+    this.snowGeo.setDrawRange(0, 0);
+    const snow = new THREE.Points(this.snowGeo, new THREE.PointsMaterial({
+      color: 0xdce6f2, size: 0.09, transparent: true, opacity: 0.85, depthWrite: false,
+    }));
+    snow.frustumCulled = false;
+    this.group.add(rain, snow);
+  }
+
+  private drop(a: Float32Array, i: number, center: THREE.Vector3, top: boolean) {
+    const th = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * PRECIP_R;
+    a[i] = center.x + Math.cos(th) * rr;
+    a[i + 1] = top ? PRECIP_TOP : Math.random() * PRECIP_TOP;
+    a[i + 2] = center.z + Math.sin(th) * rr;
+  }
+
+  update(dt: number, center: THREE.Vector3, rain01: number, snow01: number, windKmh: number, quality: number) {
+    this.t += dt;
+    const qf = quality === 2 ? 1 : quality === 1 ? 0.7 : 0.4;
+    const drift = Math.min(2.2, windKmh * 0.02);      // the real wind leans the rain over
+    let want = Math.round(RAIN_MAX * rain01 * qf);
+    if (want > 0 || this.rainN > 0) {
+      for (let births = Math.min(want - this.rainN, Math.ceil(dt * 320)); births > 0; births--) {
+        const j = this.rainN * 5;
+        // the first handful seeds mid-air so a downpour doesn't arrive as one sheet
+        this.drop(this.rd, j, center, this.rainN > 8);
+        this.rd[j + 3] = -(11 + Math.random() * 5);
+        this.rd[j + 4] = drift * (0.7 + Math.random() * 0.6);
+        this.rainN++;
+      }
+      for (let i = 0; i < this.rainN; ) {
+        const j = i * 5;
+        this.rd[j + 1] += this.rd[j + 3] * dt;
+        this.rd[j] += this.rd[j + 4] * dt;
+        if (this.rd[j + 1] < 0) {
+          if (this.rainN > want) {                    // easing off: retire at the floor
+            this.rainN--;
+            this.rd.copyWithin(j, this.rainN * 5, this.rainN * 5 + 5);
+            continue;
+          }
+          this.drop(this.rd, j, center, true);
+          this.rd[j + 4] = drift * (0.7 + Math.random() * 0.6);
+        }
+        const k = i * 6, sl = 0.03;                   // streak = one velocity-slice long
+        this.rainPos[k] = this.rd[j]; this.rainPos[k + 1] = this.rd[j + 1]; this.rainPos[k + 2] = this.rd[j + 2];
+        this.rainPos[k + 3] = this.rd[j] - this.rd[j + 4] * sl;
+        this.rainPos[k + 4] = this.rd[j + 1] - this.rd[j + 3] * sl;
+        this.rainPos[k + 5] = this.rd[j + 2];
+        i++;
+      }
+      this.rainGeo.setDrawRange(0, this.rainN * 2);
+      (this.rainGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    }
+    want = Math.round(SNOW_MAX * snow01 * qf);
+    if (want > 0 || this.snowN > 0) {
+      for (let births = Math.min(want - this.snowN, Math.ceil(dt * 260)); births > 0; births--) {
+        const j = this.snowN * 5;
+        this.drop(this.sd, j, center, this.snowN > 8);
+        this.sd[j + 3] = -(0.7 + Math.random() * 0.7);
+        this.sd[j + 4] = Math.random() * Math.PI * 2;
+        this.snowN++;
+      }
+      for (let i = 0; i < this.snowN; ) {
+        const j = i * 5;
+        this.sd[j + 1] += this.sd[j + 3] * dt;
+        this.sd[j] += drift * 0.35 * dt;
+        if (this.sd[j + 1] < 0) {
+          if (this.snowN > want) {
+            this.snowN--;
+            this.sd.copyWithin(j, this.snowN * 5, this.snowN * 5 + 5);
+            continue;
+          }
+          this.drop(this.sd, j, center, true);
+        }
+        const k = i * 3;
+        this.snowPos[k] = this.sd[j] + Math.sin(this.t * 1.1 + this.sd[j + 4]) * 0.4;
+        this.snowPos[k + 1] = this.sd[j + 1];
+        this.snowPos[k + 2] = this.sd[j + 2] + Math.cos(this.t * 0.9 + this.sd[j + 4]) * 0.3;
+        i++;
+      }
+      this.snowGeo.setDrawRange(0, this.snowN);
+      (this.snowGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    }
+  }
+}
+
 // ── the fly-in card: the session's gist + a talk composer. DOM, not WebGL — readable text
 // belongs to the page. Created ONCE and updated in place (never rebuilt per push), actions
 // delegated to the stable card root, so clicks are click-safe by construction. ────────────
@@ -1276,6 +1389,26 @@ export class HiveWorld {
                                             // math lands the face on the right third line
   private pressedEmpty: { x: number; y: number } | null = null;
   private tipV = new THREE.Vector3();       // scratch — the hot loop allocates nothing
+  // ── the sky rig: what the weather layer drives. The defaults ARE the classic TRON
+  // night, so a hive with no weather reading looks exactly as it always has; frame()
+  // eases every value toward sky-model's pure targets — nothing snaps, nothing flaps.
+  private hemi = new THREE.HemisphereLight(0x3b4a63, 0x0a0c10, 1.0);
+  private key = new THREE.DirectionalLight(0xcfe0ff, 1.0);
+  private rim = new THREE.DirectionalLight(ACCENT, 0.7);
+  private weather: Weather | null = null;
+  private precip = new Precip();
+  private skyBg = new THREE.Color(WORLD_BG);   // eased air color: fog + clear color, one value
+  private skyC = new THREE.Color();            // scratch
+  private fogC = new THREE.Color();
+  private hemiInt = 1.0; private keyInt = 1.0; // eased bases — the lightning flash rides ON
+                                               // TOP each frame, never mutating the ease state
+  private baseFog = 0.013;                     // weather's slow fog target; fogCur springs
+                                               // between it and the portrait's close fog
+  private rainCur = 0; private snowCur = 0;
+  private boltT = 0;                           // countdown to the next strike (thunder only)
+  private flash = 0;                           // the strike's decaying light
+  private weatherEl: HTMLElement;
+  private weatherTxt = "";
   // The quality governor separates two different facts (conflating them stripped the
   // neon for nothing, 2026-08-19): the frame INTERVAL (how often the browser gives us a
   // frame — Energy Saver / Low Power Mode caps this at ~30Hz and no quality change can
@@ -1320,15 +1453,15 @@ export class HiveWorld {
     this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 400);
     this.scene.fog = new THREE.FogExp2(WORLD_BG, 0.013);
     // cool, dim, mostly-emissive lighting — the neon does the work; the beans carry a
-    // touch of self-light so they stay cute against the dark
-    this.scene.add(new THREE.HemisphereLight(0x3b4a63, 0x0a0c10, 1.0));
-    const key = new THREE.DirectionalLight(0xcfe0ff, 1.0);
-    key.position.set(7, 12, 5);
-    this.scene.add(key);
-    const rim = new THREE.DirectionalLight(ACCENT, 0.7);
-    rim.position.set(-6, 6, -8);
-    this.scene.add(rim);
+    // touch of self-light so they stay cute against the dark. The rig lives in fields
+    // so the sky (time of day + live weather) can drive it.
+    this.scene.add(this.hemi);
+    this.key.position.set(7, 12, 5);
+    this.scene.add(this.key);
+    this.rim.position.set(-6, 6, -8);
+    this.scene.add(this.rim);
     this.scene.add(this.particles.points);
+    this.scene.add(this.precip.group);
 
     // the floor: a dark matte disc fading into the fog. The only pattern on it is the hex
     // LATTICE (ensureLattice) — one grid, underlining the tessellation.
@@ -1394,6 +1527,11 @@ export class HiveWorld {
     this.capEl = document.createElement("div");
     this.capEl.id = "cap-chip";
     document.body.appendChild(this.capEl);
+
+    // the sky chip: names what the weather layer is showing — empty until a reading lands
+    this.weatherEl = document.createElement("div");
+    this.weatherEl.id = "weather-chip";
+    document.body.appendChild(this.weatherEl);
 
     // the empty-board hint: a hive with zero sessions must SAY so and say what to do —
     // an unexplained empty board reads as "my beans vanished" (the user 2026-08-19)
@@ -2079,6 +2217,28 @@ export class HiveWorld {
     }
   }
 
+  // the server's latest sky reading. Ambience only: frame() eases the scene toward it,
+  // the chip names it, and session state never touches it or is touched by it.
+  setWeather(w: Weather) {
+    this.weather = w;
+    this.paintWeather();
+  }
+
+  // the chip tells the truth about the layer: condition + place, the raw code when the
+  // kind is off the map, and staleness out loud when the reading has gone old
+  private paintWeather() {
+    const w = this.weather;
+    if (!w) return;
+    const kind = weatherKind(w.code);
+    const stale = Date.now() / 1000 - w.fetchedT > 45 * 60;
+    const txt = `${weatherGlyph(kind, w.isDay)} ${Math.round(w.tempC)}° ${w.place}` +
+      (kind === "unknown" ? ` · code ${w.code}` : "") + (stale ? " · stale" : "");
+    if (txt !== this.weatherTxt) {
+      this.weatherTxt = txt;
+      this.weatherEl.textContent = txt;
+    }
+  }
+
   // apply ALL of a level's parameters (idempotent), so the governor can move both ways
   private setQuality(q: number) {
     this.quality = q;
@@ -2206,9 +2366,43 @@ export class HiveWorld {
     if (pPad && pPad.dyingT < 0) {
       this.target.set(pPad.group.position.x, 0.78, pPad.group.position.z);
     }
+    // ── the sky: time of day + live weather ease toward sky-model's pure targets. Slow
+    // rates on purpose — dawn arrives like dawn, a cloudbank slides in over seconds.
+    // With no reading yet the targets ARE the night baseline and every ease is a no-op.
+    const wx = this.weather;
+    const ph = wx ? sunPhase(Date.now() / 1000, wx.rises, wx.sets) : { dayness: 0, warmth: 0 };
+    const look = skyLook(ph.dayness, ph.warmth, wx ? weatherKind(wx.code) : "clear", wx ? wx.cloud : 0);
+    const sk = 1 - Math.exp(-0.7 * dt);
+    this.skyBg.lerp(this.skyC.setHex(look.bg), sk);
+    this.hemi.color.lerp(this.skyC.setHex(look.hemiSky), sk);
+    this.hemi.groundColor.lerp(this.skyC.setHex(look.hemiGround), sk);
+    this.key.color.lerp(this.skyC.setHex(look.keyColor), sk);
+    this.hemiInt = ease(this.hemiInt, look.hemiInt, dt, 0.7);
+    this.keyInt = ease(this.keyInt, look.keyInt, dt, 0.7);
+    this.rim.intensity = ease(this.rim.intensity, look.rimInt, dt, 0.7);
+    this.rainCur = ease(this.rainCur, look.rain, dt, 0.5);
+    this.snowCur = ease(this.snowCur, look.snow, dt, 0.5);
+    // thunder strikes on a random clock (ambience, not state — no event to wait for),
+    // sometimes doubled; the flash decays fast and rides ON TOP of the eased bases
+    if (look.lightning) {
+      this.boltT -= dt;
+      if (this.boltT <= 0) {
+        this.flash = 1;
+        this.boltT = Math.random() < 0.3 ? 0.13 : 5 + Math.random() * 11;
+      }
+    }
+    this.flash = Math.max(0, this.flash - dt * 6);
+    const fl = this.flash * this.flash;
+    this.hemi.intensity = this.hemiInt + fl * 2.4;
+    this.key.intensity = this.keyInt + fl * 1.1;
+    this.fogC.copy(this.skyBg).lerp(this.skyC.setHex(0x36415c), fl * 0.55);
     const fog = this.scene.fog as THREE.FogExp2;
-    this.fogCur = ease(this.fogCur, pPad ? 0.085 : 0.013, dt, 4);
+    fog.color.copy(this.fogC);
+    this.renderer.setClearColor(this.fogC);
+    this.baseFog = ease(this.baseFog, look.fogDensity, dt, 0.5);
+    this.fogCur = ease(this.fogCur, pPad ? 0.085 : this.baseFog, dt, 4);
     fog.density = this.fogCur;
+    if (this.pickTick % 90 === 0) this.paintWeather();   // staleness surfaces without a reading
     // rule of thirds: the dock owns the left third (its CSS width ≈ 33vw, measured by
     // boot), so centering the face in the REMAINING space lands it on the right third
     // line; the vertical offset eases the eyes up toward the top third with it
@@ -2291,6 +2485,7 @@ export class HiveWorld {
       this.rayDirty = true;
     }
     this.particles.update(dt);
+    this.precip.update(dt, this.targetCur, this.rainCur, this.snowCur, wx ? wx.windKmh : 0, this.quality);
 
     this.composer.render();
     // our slice of the frame, render submission included — what the governor governs

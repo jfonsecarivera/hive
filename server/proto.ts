@@ -89,6 +89,21 @@ export interface EtaRow {
   updatedT: number;              // last write (epoch s) — staleness is shown, never hidden
 }
 
+// the sky over the user's head — polled from Open-Meteo, ambience only. The code rides
+// the wire verbatim (open vocab): one the UI doesn't know renders as "unknown" + the
+// raw number, never coerced to clear.
+export interface Weather {
+  code: number;                  // WMO weather code
+  tempC: number;
+  cloud: number;                 // cover, 0..100
+  windKmh: number;
+  isDay: boolean;
+  place: string;                 // city label for the chip
+  rises: number[];               // sunrise/sunset epoch-seconds, today + tomorrow —
+  sets: number[];                //   the dawn/dusk blend math needs the pair around now
+  fetchedT: number;              // epoch s of the reading — staleness is shown, never hidden
+}
+
 export interface Defaults {
   model: string;
   effort: string;
@@ -120,6 +135,7 @@ export type ServerMsg =
   | { type: "chat"; sid: string; reset?: boolean; events: ChatEvent[] }
   | { type: "caps"; sid: string; commands: CmdInfo[] }
   | { type: "etas"; etas: EtaRow[] }
+  | { type: "weather"; w: Weather }
   | { type: "defaults"; host: string; defaults: Defaults; models: ModelChoice[]; efforts: string[];
       shelf: ShelfItem[] }
   | { type: "err"; sid?: string; title: string; text?: string }

@@ -90,6 +90,7 @@ export interface SessionInit {
   effort: string;
   permMode: string;
   cwd: string;
+  origin?: string;                // "hive" (default) | "adopted" — adopted beans are never fed queue work
   claudeSessionId?: string | null;
   createdT?: number;
   lastT?: number;
@@ -116,6 +117,7 @@ export class AgentSession {
   effort: string;
   permMode: string;
   cwd: string;
+  origin: string;
   claudeSessionId: string | null;
   createdT: number;
   lastT: number;
@@ -178,6 +180,7 @@ export class AgentSession {
     this.effort = init.effort;
     this.permMode = init.permMode;
     this.cwd = init.cwd;
+    this.origin = init.origin ?? "hive";
     this.claudeSessionId = init.claudeSessionId ?? null;
     this.createdT = init.createdT ?? now();
     this.lastT = init.lastT ?? this.createdT;
@@ -730,6 +733,31 @@ export class AgentSession {
     this.wake?.();
     this.settle();
   }
+
+  // QUEUED delivery — never interrupts: mid-turn it rides the CLI's own queue and fires
+  // as the very next turn (measured 2026-08-19: a queued message ran immediately after
+  // the running turn's result); idle it's an ordinary send. The cheer engine's lane.
+  queueMessage(text: string) {
+    if (this.ended) throw new Error("this session has ended");
+    this.ensureClient();
+    const t = now();
+    this.lastT = t;
+    this.emit({ k: "user", id: `u${++this.evn}-${t.toString(36)}`, t, text });
+    if (!this.inflight) {
+      this.deliver(text, t);
+      return;
+    }
+    this.pending.push({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text }] },
+      parent_tool_use_id: null,
+      session_id: this.claudeSessionId ?? "",
+    } as SDKUserMessage);
+    this.wake?.();
+  }
+
+  // a steer is waiting to deliver — the user's redirect outranks any queued work
+  steering(): boolean { return this.steerQueue.length > 0; }
 
   // the cut turn landed (or died): redirect with everything steered in the meantime
   private flushSteers() {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dutyDue, dutyLine, paceLastRun, parseDutyCommand, stripLoopPrefix } from "../server/duty";
+import { cheerLine, cheerTargets, dutyDue, dutyLine, paceLastRun, parseDutyCommand, stripLoopPrefix } from "../server/duty";
 import { renderEvents } from "../server/tools";
 
 describe("self-pacing (paceLastRun)", () => {
@@ -50,6 +50,25 @@ describe("dutyDue", () => {
     expect(dutyDue(0, 600, "awaiting", 700)).toBe(false);       // a question for the user outranks the job
     expect(dutyDue(0, 600, "blocked", 700)).toBe(true);         // a round revives a stopped session
     expect(dutyDue(0, 600, "awaitingBg", 700)).toBe(true);
+  });
+});
+
+describe("the cheer engine", () => {
+  test("lines rotate and speak as the person", () => {
+    const a = cheerLine(0), b = cheerLine(1);
+    expect(a).not.toBe(b);
+    expect(cheerLine(5)).toBe(a);              // wraps
+    expect(a.toLowerCase()).toContain("keep going");
+  });
+
+  test("targets the grinding; never the awaiting/blocked; ALL spares those too", () => {
+    const states = [
+      { sid: "w", state: "working" }, { sid: "c", state: "compacting" },
+      { sid: "r", state: "ready" }, { sid: "a", state: "awaiting" },
+      { sid: "b", state: "blocked" },
+    ];
+    expect(cheerTargets(states, false)).toEqual(["w", "c"]);
+    expect(cheerTargets(states, true)).toEqual(["w", "c", "r"]);
   });
 });
 

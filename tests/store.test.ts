@@ -28,12 +28,40 @@ describe("Store", () => {
       model: "fable", effort: "max", perm_mode: "bypassPermissions", cwd: "/tmp",
       claude_session_id: null, created_t: 1, last_t: 1, done_t: 0,
       goal: null, top_ids: "[]", done_top_ids: "[]", cost: 0, archived: 0,
+      origin: "hive",
     };
     st.upsertSession(row);
     st.upsertSession({ ...row, name: "web-2" });
     expect(st.liveSessions().map((r) => r.name)).toEqual(["web-2"]);
     st.upsertSession({ ...row, archived: 1 });
     expect(st.liveSessions()).toEqual([]);
+  });
+
+  test("origin survives the round-trip (the queue must know adopted from dragged)", () => {
+    const st = freshStore();
+    st.upsertSession({
+      sid: "s2", name: "term", color_bg: "#000", color_fg: "#fff",
+      model: "fable", effort: "max", perm_mode: "bypassPermissions", cwd: "/tmp",
+      claude_session_id: "c1", created_t: 1, last_t: 1, done_t: 0,
+      goal: null, top_ids: "[]", done_top_ids: "[]", cost: 0, archived: 0,
+      origin: "adopted",
+    });
+    expect(st.liveSessions()[0].origin).toBe("adopted");
+  });
+
+  test("the work queue is FIFO, pops one at a time, and survives a reopen", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hive-test-"));
+    const st = new Store(dir);
+    st.enqueue("first", 1);
+    st.enqueue("second", 2);
+    const front = st.nextQueued()!;
+    expect(front.task).toBe("first");
+    st.delQueued(front.id);
+    const st2 = new Store(dir);                      // a restart keeps the backlog
+    expect(st2.queuedTasks()).toEqual(["second"]);
+    expect(st2.clearQueue()).toBe(1);
+    expect(st2.nextQueued()).toBeNull();
+    expect(st2.clearQueue()).toBe(0);
   });
 
   test("defaults round-trip with sane fallbacks", () => {

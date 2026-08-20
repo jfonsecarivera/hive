@@ -77,8 +77,16 @@ button { font-family: inherit; }
   border-radius: 6px; padding: 3px 8px; max-width: 420px; }
 #cap-chip.show { display: block; }
 
-/* the live frame-rate readout (#perf in the URL) */
-#perf-hud { position: fixed; right: 14px; top: 12px; z-index: 30; pointer-events: none;
+/* the sky chip: what the board's weather layer is showing and where it came from —
+   quiet, same register as the host badge; empty (invisible) until a reading lands */
+#weather-chip {
+  position: fixed; right: 14px; top: 12px; z-index: 4; pointer-events: none;
+  color: rgba(156, 210, 255, 0.5);
+  font: 600 12px var(--font); letter-spacing: 0.1em; text-transform: lowercase;
+}
+
+/* the live frame-rate readout (#perf in the URL) — parked under the sky chip */
+#perf-hud { position: fixed; right: 14px; top: 34px; z-index: 30; pointer-events: none;
   font: 11px var(--mono); color: rgba(156, 210, 255, 0.7);
   background: rgba(12, 15, 20, 0.8); border: 1px solid var(--hairline);
   border-radius: 6px; padding: 3px 8px; }
