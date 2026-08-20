@@ -2,6 +2,7 @@
 // (a) the board's state vocabulary and (b) upsertable chat events. State moves on
 // events only — session_state_changed, status, api_retry, result, a pending ask —
 // never on timers (the romp design rule this app inherits).
+import { existsSync, mkdirSync } from "node:fs";
 import { query, type ModelInfo, type Options, type PermissionResult, type PermissionUpdate, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AskQuestion, BgTask, ChatEvent, CmdInfo, ModelChoice, SessionSnap, TodoItem, WireState } from "./proto";
 
@@ -269,6 +270,15 @@ export class AgentSession {
 
   private ensureClient() {
     if (this.q || this.ended) return;
+    // a missing cwd makes the CLI spawn die with a misleading "binary failed to launch"
+    // (seen live 2026-08-19: a test session with an uncreated dir; adopted sessions whose
+    // worktree was deleted hit the same wall) — create it and say so
+    try {
+      if (!existsSync(this.cwd)) {
+        mkdirSync(this.cwd, { recursive: true });
+        this.note(`its working directory was missing — recreated empty: ${this.cwd}`);
+      }
+    } catch { /* the spawn error below stays the honest signal */ }
     this.abort = new AbortController();
     this.inputsClosed = false;
     const opts: Options = {
