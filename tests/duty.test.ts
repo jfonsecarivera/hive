@@ -18,21 +18,25 @@ describe("stripLoopPrefix — duties already loop", () => {
   });
 });
 
-describe("parseDutyCommand", () => {
-  test("set / off / status / error forms", () => {
-    expect(parseDutyCommand("/duty every 10m Check every session and unstick the blocked ones."))
-      .toEqual({ kind: "set", spec: { everyS: 600, prompt: "Check every session and unstick the blocked ones." } });
+describe("parseDutyCommand — /loop is the command, /duty the alias", () => {
+  test("fixed-cadence, self-paced, off, save, status, error forms", () => {
+    expect(parseDutyCommand("/loop every 10m Check every session and unstick the blocked ones."))
+      .toEqual({ kind: "set", spec: { everyS: 600, prompt: "Check every session and unstick the blocked ones.", selfPaced: false } });
     expect(parseDutyCommand("/duty every 2h summarize the board")).toEqual(
-      { kind: "set", spec: { everyS: 7200, prompt: "summarize the board" } });
-    expect(parseDutyCommand("/duty off")).toEqual({ kind: "off" });
-    expect(parseDutyCommand("/duty save")).toEqual({ kind: "save" });
-    expect(parseDutyCommand("/duty")).toEqual({ kind: "status" });
-    expect(parseDutyCommand("/duty every tuesday do things")!.kind).toBe("error");
-    expect(parseDutyCommand("/duty every 30s too fast")!.kind).toBe("error");   // 1m floor
+      { kind: "set", spec: { everyS: 7200, prompt: "summarize the board", selfPaced: false } });
+    // the romp habit: no interval → SELF-PACED with the fallback cadence
+    expect(parseDutyCommand("/loop watch the training run and keep my eta file fresh")).toEqual(
+      { kind: "set", spec: { everyS: 1800, prompt: "watch the training run and keep my eta file fresh", selfPaced: true } });
+    expect(parseDutyCommand("/loop off")).toEqual({ kind: "off" });
+    expect(parseDutyCommand("/loop save")).toEqual({ kind: "save" });
+    expect(parseDutyCommand("/loop")).toEqual({ kind: "status" });
+    expect(parseDutyCommand("/loop every tuesday do things")!.kind).toBe("error");
+    expect(parseDutyCommand("/loop every 30s too fast")!.kind).toBe("error");   // 1m floor
   });
 
-  test("non-duty text passes through untouched", () => {
-    expect(parseDutyCommand("hello /duty")).toBeNull();
+  test("non-loop text passes through untouched", () => {
+    expect(parseDutyCommand("hello /loop")).toBeNull();
+    expect(parseDutyCommand("/loophole in the spec")).toBeNull();
     expect(parseDutyCommand("/dutyfree shopping")).toBeNull();
     expect(parseDutyCommand("/compact")).toBeNull();
   });

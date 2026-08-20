@@ -47,7 +47,7 @@ export function loadRoster(path = rosterPath()): Map<string, RosterEntry> {
   for (const [name, v] of Object.entries(d as Record<string, unknown>)) {
     const e = v as Partial<RosterEntry>;
     if (!name.trim() || !e || typeof e.prompt !== "string" || !e.prompt.trim()) continue;
-    if (typeof e.every !== "string" || parseEvery(e.every) === null) continue;
+    if (typeof e.every !== "string" || (e.every !== "self" && parseEvery(e.every) === null)) continue;
     // a hand-written entry may carry romp's /loop habit — duties already loop
     const prompt = e.prompt.replace(/^\s*\/loop\s+/, "");
     out.set(name.trim(), {

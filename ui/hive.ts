@@ -1910,7 +1910,7 @@ export class HiveWorld {
         const dutyIdle = !done && tipPad.sess.duty
           && (tipPad.sess.state === "ready" || tipPad.sess.state === "awaitingBg");
         const line = done ? finishedLine(tipPad.sess, tnow)
-          : dutyIdle ? `on duty — next round in ${hiveAge(Math.max(0, tipPad.sess.duty!.nextT - tnow))}`
+          : dutyIdle ? `on duty${tipPad.sess.duty!.selfPaced ? " (self-paced)" : ""} — next round in ${hiveAge(Math.max(0, tipPad.sess.duty!.nextT - tnow))}`
           : stateLine(tipPad.sess, tnow);
         if (line !== this.tipText) {
           this.tipText = line;

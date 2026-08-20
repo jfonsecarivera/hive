@@ -7,7 +7,19 @@
 //   /duty off        → retire
 // Pure logic here (tested); hub owns the ticker and the store.
 
-export interface DutySpec { everyS: number; prompt: string }
+export interface DutySpec { everyS: number; prompt: string; selfPaced: boolean }
+
+// self-paced loops ("/loop <job>", no interval — the romp habit): the agent names its
+// own next round via hive_next_round; this fallback only catches a round that forgot
+export const SELF_PACED_FALLBACK_S = 1800;
+
+// appended to every self-paced round — the one place the loop machinery speaks, because
+// the agent must know the tool that paces it
+export function roundText(prompt: string, selfPaced: boolean): string {
+  return selfPaced
+    ? `${prompt}\n\n(You're on a self-paced loop: when this round's work is done, call hive_next_round to say when to check next — otherwise I'll nudge you again in 30m.)`
+    : prompt;
+}
 
 export type DutyCommand =
   | { kind: "set"; spec: DutySpec }
@@ -19,22 +31,32 @@ export type DutyCommand =
 const UNIT_S: Record<string, number> = { s: 1, m: 60, h: 3600 };
 export const DUTY_MIN_S = 60;
 
+// The command is /loop (the hand already knows it; hive intercepts it, so the CLI's
+// in-process loop can never arm inside a hive session); /duty stays as a quiet alias.
+//   /loop every 10m <job>   fixed cadence
+//   /loop <job>             SELF-PACED (the agent names its next round; 30m fallback)
+//   /loop save · off · (bare)
 export function parseDutyCommand(text: string): DutyCommand | null {
   const t = text.trim();
-  if (!/^\/duty(\s|$)/.test(t)) return null;
-  const rest = t.slice("/duty".length).trim();
+  const m0 = /^\/(loop|duty)(\s|$)/.exec(t);
+  if (!m0) return null;
+  const rest = t.slice(m0[1].length + 1).trim();
   if (!rest) return { kind: "status" };
   if (rest === "off" || rest === "stop") return { kind: "off" };
   if (rest === "save") return { kind: "save" };
   const m = /^every\s+(\d+)\s*(s|m|h)\s+([\s\S]+)$/.exec(rest);
-  if (!m) {
-    return { kind: "error", message: 'usage: "/duty every 10m <the job>" · "/duty save" · "/duty off" · "/duty"' };
+  if (m) {
+    const everyS = Number(m[1]) * UNIT_S[m[2]];
+    if (everyS < DUTY_MIN_S) return { kind: "error", message: "the shortest round is every 1m" };
+    const prompt = m[3].trim();
+    if (!prompt) return { kind: "error", message: "a loop needs the job written out" };
+    return { kind: "set", spec: { everyS, prompt, selfPaced: false } };
   }
-  const everyS = Number(m[1]) * UNIT_S[m[2]];
-  if (everyS < DUTY_MIN_S) return { kind: "error", message: "the shortest round is every 1m" };
-  const prompt = m[3].trim();
-  if (!prompt) return { kind: "error", message: "a duty needs the job written out" };
-  return { kind: "set", spec: { everyS, prompt } };
+  if (/^every\b/.test(rest)) {
+    return { kind: "error", message: 'usage: "/loop every 10m <the job>" · "/loop <the job>" (self-paced) · save · off' };
+  }
+  // no interval: the job itself — self-paced
+  return { kind: "set", spec: { everyS: SELF_PACED_FALLBACK_S, prompt: rest, selfPaced: true } };
 }
 
 // May this round fire now? The deciding facts: the cadence is due, and the session is

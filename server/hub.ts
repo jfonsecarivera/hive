@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { adoptGoal, adoptMode, adoptName, historyToEvents, pickAdoptable, pickRompAdoptable } from "./adopt";
-import { dutyDue, dutyLine, paceLastRun, parseDutyCommand, stripLoopPrefix } from "./duty";
+import { dutyDue, dutyLine, paceLastRun, parseDutyCommand, roundText, SELF_PACED_FALLBACK_S, stripLoopPrefix } from "./duty";
 import { fmtEvery, loadRoster, parseEvery, saveRoster } from "./roster";
 import { TranscriptMirror } from "./mirror";
 import { readRompRegistry } from "./romp";
@@ -53,7 +53,7 @@ export class Hub {
     new TranscriptMirror(() => this.sessions.values()).start();
     // duties: the 30s tick only PROPOSES a round — dutyDue disposes on the session's
     // actual state, so rounds never pile onto a running turn
-    for (const d of this.store.allDuties()) this.duties.set(d.sid, { everyS: d.every_s, prompt: d.prompt, lastRunT: d.last_run_t });
+    for (const d of this.store.allDuties()) this.duties.set(d.sid, { everyS: d.every_s, prompt: d.prompt, lastRunT: d.last_run_t, selfPaced: !!d.self_paced });
     setInterval(() => this.dutyTick(), 30_000);
   }
 
@@ -66,12 +66,13 @@ export class Hub {
       throw new Error(`"${name}" is already on the board`);
     }
     const s = this.create({ op: "create", name, model: entry.model, effort: entry.effort, cwd: entry.cwd });
-    const everyS = parseEvery(entry.every)!;
+    const selfPaced = entry.every === "self";
+    const everyS = selfPaced ? SELF_PACED_FALLBACK_S : parseEvery(entry.every)!;
     const nowS = Math.floor(Date.now() / 1000);
-    this.duties.set(s.sid, { everyS, prompt: entry.prompt, lastRunT: nowS });
-    this.store.setDuty(s.sid, everyS, entry.prompt, nowS);
-    s.note(`hired from the shelf — every ${entry.every}: ${entry.prompt.slice(0, 140)}${entry.prompt.length > 140 ? "…" : ""}`);
-    try { s.send(entry.prompt); } catch { /* the first round retries on the tick */ }
+    this.duties.set(s.sid, { everyS, prompt: entry.prompt, lastRunT: nowS, selfPaced });
+    this.store.setDuty(s.sid, everyS, entry.prompt, nowS, selfPaced);
+    s.note(`hired from the shelf — ${selfPaced ? "self-paced" : "every " + entry.every}: ${entry.prompt.slice(0, 140)}${entry.prompt.length > 140 ? "…" : ""}`);
+    try { s.send(roundText(entry.prompt, selfPaced)); } catch { /* the first round retries on the tick */ }
     this.publish("hive", this.defaultsMsg());
     this.publishHive();
   }
@@ -85,7 +86,7 @@ export class Hub {
     this.publish("hive", this.defaultsMsg());
   }
 
-  private duties = new Map<string, { everyS: number; prompt: string; lastRunT: number }>();
+  private duties = new Map<string, { everyS: number; prompt: string; lastRunT: number; selfPaced: boolean }>();
 
   private dutyTick() {
     const nowS = Math.floor(Date.now() / 1000);
@@ -95,7 +96,7 @@ export class Hub {
       if (!dutyDue(d.lastRunT, d.everyS, s.stateNow(), nowS)) continue;
       d.lastRunT = nowS;
       this.store.touchDuty(sid, nowS);
-      try { s.send(d.prompt); } catch { /* a dead session revives on the next round */ }
+      try { s.send(roundText(d.prompt, d.selfPaced)); } catch { /* a dead session revives on the next round */ }
       this.scheduleHive();
     }
   }
@@ -112,27 +113,28 @@ export class Hub {
       const lp = stripLoopPrefix(cmd.spec.prompt);
       if (lp.stripped) {
         cmd.spec.prompt = lp.prompt;
-        s.note("duties already loop — dropped the /loop prefix from the job");
+        s.note("this loop already loops — dropped the extra /loop prefix from the job");
       }
-      this.duties.set(sid, { everyS: cmd.spec.everyS, prompt: cmd.spec.prompt, lastRunT: nowS });
-      this.store.setDuty(sid, cmd.spec.everyS, cmd.spec.prompt, nowS);
+      const sp = cmd.spec.selfPaced;
+      this.duties.set(sid, { everyS: cmd.spec.everyS, prompt: cmd.spec.prompt, lastRunT: nowS, selfPaced: sp });
+      this.store.setDuty(sid, cmd.spec.everyS, cmd.spec.prompt, nowS, sp);
       // a SAVED duty follows the composer: editing the job here updates its roster entry
       const roster = loadRoster();
       const saved = roster.get(s.name);
       if (saved) {
-        roster.set(s.name, { ...saved, every: fmtEvery(cmd.spec.everyS), prompt: cmd.spec.prompt });
+        roster.set(s.name, { ...saved, every: sp ? "self" : fmtEvery(cmd.spec.everyS), prompt: cmd.spec.prompt });
         saveRoster(roster);
       }
-      s.note(`on duty — every ${fmtEvery(cmd.spec.everyS)}: ${cmd.spec.prompt.slice(0, 140)}${cmd.spec.prompt.length > 140 ? "…" : ""}${saved ? " (roster updated)" : ""} (first round starting now)`);
-      try { s.send(cmd.spec.prompt); } catch { /* revives next round */ }
+      s.note(`on duty — ${sp ? "self-paced (30m fallback)" : "every " + fmtEvery(cmd.spec.everyS)}: ${cmd.spec.prompt.slice(0, 140)}${cmd.spec.prompt.length > 140 ? "…" : ""}${saved ? " (roster updated)" : ""} (first round starting now)`);
+      try { s.send(roundText(cmd.spec.prompt, sp)); } catch { /* revives next round */ }
     } else if (cmd.kind === "save") {
       const d = this.duties.get(sid);
       if (!d) {
-        s.note('nothing to save — set the job first: "/duty every 10m <the job>"', "err");
+        s.note('nothing to save — set the job first: "/loop <the job>"', "err");
       } else {
         const roster = loadRoster();
         roster.set(s.name, {
-          every: fmtEvery(d.everyS), prompt: d.prompt,
+          every: d.selfPaced ? "self" : fmtEvery(d.everyS), prompt: d.prompt,
           model: s.model, effort: s.effort, cwd: s.cwd,
         });
         saveRoster(roster);
@@ -149,8 +151,8 @@ export class Hub {
     } else if (cmd.kind === "status") {
       const d = this.duties.get(sid);
       const saved = d && loadRoster().has(s.name);
-      s.note(d ? dutyLine(d.everyS, d.lastRunT, nowS) + (saved ? " · on the shelf" : " · not saved (/duty save)")
-               : 'no duty — set one with "/duty every 10m <the job>"');
+      s.note(d ? dutyLine(d.everyS, d.lastRunT, nowS) + (d.selfPaced ? " · self-paced" : "") + (saved ? " · on the shelf" : " · not saved (/loop save)")
+               : 'no loop — set one with "/loop <the job>"');
     } else {
       s.note(cmd.message, "err");
     }
@@ -294,8 +296,11 @@ export class Hub {
   capsMsg(sid: string): string {
     const s = this.sessions.get(sid);
     // hive's own composer commands ride the same menu as the session's slash commands
-    const builtins = [{ name: "/duty", description: "run this session's job on a loop (hive)", argumentHint: "every 10m <job> · save · off" }];
-    return JSON.stringify({ type: "caps", sid, commands: s ? [...builtins, ...s.commands] : [] } satisfies ServerMsg);
+    const builtins = [{ name: "/loop", description: "run this session's job on a loop (hive — survives restarts, shows on the board)", argumentHint: "<job> (self-paced) · every 10m <job> · save · off" }];
+    // hive intercepts /loop and /duty, so the CLI's own entries for them would be dead
+    // menu rows — hive's wins
+    const cmds = s ? s.commands.filter((c) => !/^\/?(loop|duty)$/.test(c.name)) : [];
+    return JSON.stringify({ type: "caps", sid, commands: s ? [...builtins, ...cmds] : [] } satisfies ServerMsg);
   }
 
   private persist(sid: string) {
@@ -318,7 +323,7 @@ export class Hub {
     return [...this.sessions.values()].map((s) => {
       const sn = s.snap();
       const d = this.duties.get(sn.sid);
-      if (d) sn.duty = { everyS: d.everyS, nextT: d.lastRunT + d.everyS };
+      if (d) sn.duty = { everyS: d.everyS, nextT: d.lastRunT + d.everyS, selfPaced: d.selfPaced };
       return sn;
     });
   }

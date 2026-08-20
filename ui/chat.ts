@@ -182,7 +182,7 @@ export class ChatDock {
     const bits = [stateLine(s, now), s.model + " · " + s.effort];
     if (s.duty) {
       const e = s.duty.everyS;
-      bits.push(`duty every ${e >= 3600 ? e / 3600 + "h" : e / 60 + "m"}`);
+      bits.push(s.duty.selfPaced ? "loop · self-paced" : `loop every ${e >= 3600 ? e / 3600 + "h" : e / 60 + "m"}`);
     }
     if (s.cost > 0) bits.push("$" + (s.cost < 10 ? s.cost.toFixed(2) : s.cost.toFixed(1)));
     this.head.sub.textContent = bits.join("  ·  ");

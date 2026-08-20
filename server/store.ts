@@ -53,6 +53,8 @@ export class Store {
         last_run_t INTEGER DEFAULT 0, created_t INTEGER
       );
     `);
+    try { this.db.exec("ALTER TABLE duties ADD COLUMN self_paced INTEGER DEFAULT 0"); }
+    catch { /* column already there */ }
     this.seq = (this.db.query("SELECT COALESCE(MAX(seq),0) AS m FROM chat").get() as any).m;
   }
 
@@ -103,10 +105,11 @@ export class Store {
     return rows.reverse().map((r) => JSON.parse(r.json) as ChatEvent);
   }
 
-  setDuty(sid: string, everyS: number, prompt: string, nowT: number) {
-    this.db.query(`INSERT INTO duties(sid, every_s, prompt, last_run_t, created_t)
-      VALUES($sid,$e,$p,$t,$t)
-      ON CONFLICT(sid) DO UPDATE SET every_s=$e, prompt=$p`).run({ $sid: sid, $e: everyS, $p: prompt, $t: nowT });
+  setDuty(sid: string, everyS: number, prompt: string, nowT: number, selfPaced = false) {
+    this.db.query(`INSERT INTO duties(sid, every_s, prompt, last_run_t, created_t, self_paced)
+      VALUES($sid,$e,$p,$t,$t,$sp)
+      ON CONFLICT(sid) DO UPDATE SET every_s=$e, prompt=$p, self_paced=$sp`)
+      .run({ $sid: sid, $e: everyS, $p: prompt, $t: nowT, $sp: selfPaced ? 1 : 0 });
   }
 
   delDuty(sid: string) {
@@ -117,8 +120,8 @@ export class Store {
     this.db.query("UPDATE duties SET last_run_t = $t WHERE sid = $sid").run({ $sid: sid, $t: t });
   }
 
-  allDuties(): { sid: string; every_s: number; prompt: string; last_run_t: number }[] {
-    return this.db.query("SELECT sid, every_s, prompt, last_run_t FROM duties").all() as any;
+  allDuties(): { sid: string; every_s: number; prompt: string; last_run_t: number; self_paced: number }[] {
+    return this.db.query("SELECT sid, every_s, prompt, last_run_t, self_paced FROM duties").all() as any;
   }
 
   kvGet(k: string): string | null {
