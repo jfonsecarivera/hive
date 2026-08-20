@@ -564,6 +564,13 @@ button { font-family: inherit; }
   border-radius: 11px; color: #e8edf3; font: 14px/1.55 var(--font); padding: 10px 13px; }
 #chat-dock .cd-input:focus { outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(156, 210, 255, 0.14); }
+/* the composer's interrupt: under the thumb whenever a turn runs (Esc does the same) */
+#chat-dock .cd-stopc { flex: 0 0 auto; cursor: pointer; border-radius: 9px;
+  background: rgba(229, 72, 77, 0.14); border: 1px solid rgba(229, 72, 77, 0.45);
+  color: var(--red-soft); font: 600 13px var(--font); padding: 8px 13px;
+  transition: transform 0.12s ease, background 0.12s ease; }
+#chat-dock .cd-stopc:hover { background: rgba(229, 72, 77, 0.26); }
+#chat-dock .cd-stopc:active { transform: scale(0.94); }
 #chat-dock .cd-send { flex: 0 0 auto; cursor: pointer; border: 0; border-radius: 9px;
   background: var(--accent); color: var(--accent-fg); font: 600 13px var(--font);
   padding: 8px 15px; transition: transform 0.12s ease, filter 0.12s ease; }

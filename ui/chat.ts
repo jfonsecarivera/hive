@@ -57,6 +57,7 @@ export class ChatDock {
       '<button class="cd-jump" data-act="jump" hidden>↓ latest</button>' +
       '<div class="cd-menu" hidden></div>' +
       '<footer class="cd-compose">' +
+      '<button class="cd-stopc" data-act="stop" title="Interrupt the running turn (Esc)" hidden>■</button>' +
       '<textarea class="cd-input" rows="1" placeholder="Say something…"></textarea>' +
       '<button class="cd-send" data-act="send" title="Send (Enter)">Send</button>' +
       "</footer>";
@@ -118,7 +119,13 @@ export class ChatDock {
         if (e.key === "Escape") { e.preventDefault(); this.hideMenu(); return; }
       }
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.send(); }
-      if (e.key === "Escape") { e.preventDefault(); this.close(); }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        // the CLI's own muscle memory: Esc STOPS a running turn; only an idle
+        // session's Esc closes the chat
+        if (this.busy) this.interrupt();
+        else this.close();
+      }
     });
     this.input.addEventListener("input", () => { this.autosize(); this.refreshMenu(); });
     this.input.addEventListener("blur", () => setTimeout(() => this.hideMenu(), 120));
@@ -129,9 +136,14 @@ export class ChatDock {
     });
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && this.isOpen() && !this.renaming
-          && document.activeElement !== this.input) this.close();
+          && document.activeElement !== this.input) {
+        if (this.busy) this.interrupt();
+        else this.close();
+      }
     });
   }
+
+  private busy = false;
 
   isOpen(): boolean { return this.el.classList.contains("open"); }
 
@@ -206,8 +218,10 @@ export class ChatDock {
       this.tasksEl.innerHTML = html;
     }
     const busy = s.state === "working" || s.state === "compacting" || s.state === "retrying";
+    this.busy = busy;
     this.head.stop.classList.toggle("show", busy);
-    this.input.placeholder = busy ? "Steer — lands in the running turn…" : "Say something…";
+    (this.el.querySelector(".cd-stopc") as HTMLElement).hidden = !busy;
+    this.input.placeholder = busy ? "Steer — lands in the running turn… (Esc stops)" : "Say something…";
   }
 
   // the session's dynamic slash commands landed (watch reply, or a commands_changed push)
