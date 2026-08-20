@@ -11,6 +11,7 @@ import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { BLOCKED_LEAN, BLOCKED_POUND, BLOCKED_SINK, BLOCKED_SIT, DESK_DEPTH, DESK_TOP_Y, DESK_W, DESK_Z, SCREEN_OFF, SIT_BACK, workingPose, workingThink } from "./acting";
 import { delegate } from "./actions";
 import { assignSlots, axialToXZ, frameDt, frameRadius, HEX_SIZE, hexCorner, hexDistance, latticeSegments, PAD_R, PAD_THETA, RIM_THETA, ringOf, slotOfAxial, spiralSlot, xzToAxial } from "./hive-layout";
 import { diffSessions, finishedLine, foldEnding, foldSeenAsk, foldSeenDone, hiveAge, isFaded, isKnownState, stateLine, type HiveSession, type SeenDone } from "./hive-model";
@@ -294,6 +295,7 @@ class Pad {
     this.pulseColor.setHex(0xffd700);
   }
   notice() { this.guy.perk(); }              // hover found them — eyes widen for a beat
+  typing() { return this.guy.typingNow; }    // mid-hammer — the world answers with key sparks
   pickUp() { this.guy.setCarried("held"); }
   putDown() { this.guy.setCarried("no"); }
   setScared(s: boolean) { this.guy.setCarried(s ? "scared" : "held"); }
@@ -535,6 +537,10 @@ class Dweller {
   private leanX = 0; private leanZ = 0;     // carried dangle — feet trailing the hand
   proud = false;                            // unseen finished work: stand tall, hop for joy
   landed = false;                           // a real touchdown — the world turns it into dust
+  typingNow = false;                        // mid-hammer this frame — the world reads it for key sparks
+  private thinkCur = 0;                     // eased think-pause blend (the working performance)
+  private szCur = 0;                        // eased seat-back: desk states scoot the bean off
+                                            // the desk (acting.ts SIT_BACK), others re-center
 
   constructor(tint: string) {
     this.baseColor = new THREE.Color(tint).lerp(new THREE.Color(0xffffff), 0.1);
@@ -603,35 +609,38 @@ class Dweller {
     this.group.add(this.orb);
 
     // the desk: tabletop + laptop with an emissive screen, parked in front of the bean;
-    // shown only while working (the strongest one-glance "busy" silhouette there is)
+    // shown only while working (the strongest one-glance "busy" silhouette there is).
+    // Placement and depth come from acting.ts — the clearance tests there prove the
+    // seated bean's leans never put the keyboard INSIDE the body.
     this.desk = new THREE.Group();
     const slab = new THREE.MeshStandardMaterial({ color: 0x141920, roughness: 0.35, metalness: 0.5 });
-    const top = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.05, 0.42), slab);
-    top.position.y = 0.5;
+    const top = new THREE.Mesh(new THREE.BoxGeometry(DESK_W, 0.05, DESK_DEPTH), slab);
+    top.position.y = DESK_TOP_Y;
     this.desk.add(top);
     // a hairline of accent light along the desk's front edge — the Tron detail line
     const edge = new THREE.Mesh(
-      new THREE.BoxGeometry(0.78, 0.012, 0.012),
+      new THREE.BoxGeometry(DESK_W, 0.012, 0.012),
       new THREE.MeshBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }),
     );
-    edge.position.set(0, 0.527, 0.21);
+    edge.position.set(0, DESK_TOP_Y + 0.027, DESK_DEPTH / 2 - 0.01);
     this.desk.add(edge);
-    for (const [lx, lz] of [[-0.34, -0.16], [0.34, -0.16], [-0.34, 0.16], [0.34, 0.16]]) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.5, 0.05), slab);
-      leg.position.set(lx, 0.25, lz);
+    const legX = DESK_W / 2 - 0.07, legZ = DESK_DEPTH / 2 - 0.05;
+    for (const [lx, lz] of [[-legX, -legZ], [legX, -legZ], [-legX, legZ], [legX, legZ]]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.05, DESK_TOP_Y, 0.05), slab);
+      leg.position.set(lx, DESK_TOP_Y / 2, lz);
       this.desk.add(leg);
     }
     const shell = new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.4, metalness: 0.3 });
-    const base = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.02, 0.24), shell);
-    base.position.set(0, 0.535, 0.02);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.02, 0.3), shell);
+    base.position.set(0, DESK_TOP_Y + 0.035, 0.02);
     this.screenMat = new THREE.MeshStandardMaterial({
       color: 0x10151c, roughness: 0.3, emissive: 0x9fd8ff, emissiveIntensity: 0.9,
     });
-    const screen = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.24, 0.015), this.screenMat);
-    screen.position.set(0, 0.65, 0.13);
-    screen.rotation.x = -0.22;
+    const screen = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.34, 0.015), this.screenMat);
+    screen.position.set(0, DESK_TOP_Y + 0.19, SCREEN_OFF);
+    screen.rotation.x = -0.24;
     this.desk.add(base, screen);
-    this.desk.position.set(0, 0, 0.58);
+    this.desk.position.set(0, 0, DESK_Z);
     this.desk.rotation.y = Math.PI;         // screen faces the bean
     this.desk.visible = false;
     this.group.add(this.desk);
@@ -713,23 +722,27 @@ class Dweller {
     }
     if (this.perkT > 0) this.perkT -= dt;
 
-    let y = 0, rotX = 0, rotZ = 0, yaw = 0, sx = 0;
+    let y = 0, rotX = 0, rotZ = 0, yaw = 0, sx = 0, sz = 0;
     let aura = 0, desk = false;
     // resting arm pose; states override
     let armLZ = 0.35, armRZ = -0.35, armLX = 0, armRX = 0;
     switch (s) {
       case "working": {
         desk = true;
+        sz = -SIT_BACK;                         // a round creature sits BACK from a desk
         this.bodyMat.emissiveIntensity = 0.3;   // the screen lights the bean up a touch
-        // hands over the keys, tapping in bursts, head nodding to the work — and every
-        // ~14s a little arms-overhead stretch break (anyone typing that long earns one)
+        // the performance must read as WORK from across the room (the user, 2026-08-19:
+        // the old finger-hover didn't): alternating key-pounding with the body riding
+        // the beat, a chin-scratch think-pause every ~10s, and the ~14s arms-overhead
+        // stretch break. The choreography is pure math in acting.ts — tested there;
+        // only the think-ease and the sparks flag live here.
         const stretch = cycleBeat(t + this.phase * 2.2, 14, 1.3);
-        const burst = stretch < 0.02 && Math.sin(t * 2.8 + this.phase) > -0.35;
-        armLX = (-1.15 + (burst ? 0.18 * Math.sin(t * 13) : 0)) * (1 - stretch);
-        armRX = (-1.15 + (burst ? 0.18 * Math.sin(t * 13 + Math.PI) : 0)) * (1 - stretch);
-        armLZ = 0.12 + 2.2 * stretch; armRZ = -0.12 - 2.2 * stretch;
-        rotX = 0.1 - 0.34 * stretch + 0.02 * Math.sin(t * 5.6) * (1 - stretch);
-        this.screenMat.emissiveIntensity = 0.75 + (burst ? 0.3 * Math.abs(Math.sin(t * 9)) : 0.1);
+        this.thinkCur = ease(this.thinkCur, workingThink(t, this.phase), dt, 5);
+        const p = workingPose(t, this.phase, stretch, this.thinkCur);
+        armLX = p.armLX; armRX = p.armRX; armLZ = p.armLZ; armRZ = p.armRZ;
+        rotX = p.rotX; rotZ = p.rotZ; y = p.bounce;
+        this.screenMat.emissiveIntensity = p.screen;
+        this.typingNow = stretch < 0.25 && this.thinkCur < 0.5;
         break;
       }
       case "awaiting": {                     // they need YOU: face the camera, big both-arms wave
@@ -742,13 +755,16 @@ class Dweller {
       }
       case "blocked": {
         desk = true;                          // the wreck stays on the desk, screen dead, smoking
+        sz = -BLOCKED_SIT;                    // pushed back from the machine, head hung
         this.screenMat.emissiveIntensity = 0.04;
-        rotX = 0.55; y = -0.05;              // folded forward over it, arms hanging dead
+        // the deflated slump — depth pinned by the acting.ts clearance tests so the head
+        // stays clearly above the tabletop from any camera, never on or through it
+        rotX = BLOCKED_LEAN; y = -BLOCKED_SINK;
         armLZ = 0.05; armRZ = -0.05; armLX = -0.4; armRX = -0.4;
         // now and then, one slow, weary pound on the dead machine
         const pound = cycleBeat(t + this.phase * 3, 4.6, 0.55);
         armRX = -0.4 - 1.1 * pound;
-        rotX = 0.55 + 0.07 * pound;
+        rotX = BLOCKED_LEAN + BLOCKED_POUND * pound;
         break;
       }
       case "retrying": {
@@ -843,7 +859,7 @@ class Dweller {
     // carried outranks everything: they hang from your hand, facing you, feet trailing
     // the motion — and held over the trash they KNOW: arms clamped up, trembling
     if (this.carried !== "no") {
-      yaw = camYaw; y = 0; sx = 0;
+      yaw = camYaw; y = 0; sx = 0; sz = 0;
       rotX = this.leanX; rotZ = this.leanZ;
       if (this.carried === "held") {
         armLZ = 2.2 + 0.28 * Math.sin(t * 7.5); armRZ = -2.2 - 0.28 * Math.sin(t * 7.5 + 0.9);
@@ -857,7 +873,7 @@ class Dweller {
       this.leanZ = ease(this.leanZ, 0, dt, 10);
     }
     if (s !== "opening") { this.face.visible = true; this.armL.visible = true; this.armR.visible = true; }
-    if (s !== "working") this.bodyMat.emissiveIntensity = 0.22;
+    if (s !== "working") { this.bodyMat.emissiveIntensity = 0.22; this.typingNow = false; }
     if (s !== "awaitingBg") this.orbMat.opacity = ease(this.orbMat.opacity, 0, dt, 8);
     this.desk.visible = desk;
 
@@ -897,6 +913,9 @@ class Dweller {
     this.armR.rotation.set(armRX, 0, armRZ);
     this.group.position.x = sx;
     this.group.position.y = PAD_H + y;
+    // eased, so entering a desk state reads as scooting up the chair, not a teleport
+    this.szCur = ease(this.szCur, sz, dt, 6);
+    this.group.position.z = this.szCur;
     this.group.rotation.y = yaw;
     this.torso.rotation.x = rotX;
     this.torso.rotation.z = rotZ;
@@ -2454,9 +2473,17 @@ export class HiveWorld {
     for (const pad of this.pads.values()) {
       if (pad.dyingT >= 0) continue;
       const st = pad.sess.state;
+      if (st === "working" && pad.typing() && Math.random() < dt * 3) {
+        // key sparks: tiny chips of light popping off the keyboard while the hands are
+        // actually hammering (Dweller raises the flag) — the work is VISIBLE output,
+        // and it pauses honestly with the chin-scratch and the stretch break
+        const at = pad.group.position.clone(); at.y += PAD_H + DESK_TOP_Y + 0.12; at.z += DESK_Z - 0.02;
+        at.x += (Math.random() - 0.5) * 0.3;
+        this.particles.burst(at, [0x9fd8ff, ACCENT], 2, 0.55, -2.5, 0.32);
+      }
       if (st === "blocked" && Math.random() < dt * 1.6) {
-        const at = pad.group.position.clone(); at.y += PAD_H + 0.75;
-        at.x += 0.25; at.z += 0.45;           // off the dead laptop, not the bean's head
+        const at = pad.group.position.clone(); at.y += PAD_H + DESK_TOP_Y + 0.3;
+        at.x += 0.25; at.z += DESK_Z - 0.06;  // off the dead laptop, not the bean's head
         this.particles.burst(at, [0x555b63, 0x3c4148, 0x6a7076], 2, 0.22, 0.55, 1.4);
       }
       if (st === "ready" && pad.dozing() && Math.random() < dt * 0.8) {
