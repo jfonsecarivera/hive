@@ -58,11 +58,11 @@ describe("pickRompAdoptable", () => {
     [SID_B, { alive: false }],               // named but dead
   ]);
 
-  test("alive sessions adopt at ANY age; dead ones only within the fresh grace", () => {
+  test("alive sessions adopt at ANY age; dead ones only while still being written", () => {
     const infos = [
       info(SID_A, 30 * DAY),                 // alive, idle a month → in (never lose the thread)
-      info(SID_B, 2 * HOUR),                 // dead but worked 2h ago → in (the revive edge)
-      info(SID_C, HOUR),                     // not romp's at all → out
+      info(SID_B, HOUR / 2),                 // no sdk record but writing right now → in (tmux-live)
+      info(SID_C, HOUR / 4),                 // not romp's at all → out
     ];
     expect(pickRompAdoptable(infos, reg, new Set(), { max: 10, nowMs: NOW })
       .map((i) => i.sessionId)).toEqual([SID_B, SID_A]);
@@ -70,6 +70,6 @@ describe("pickRompAdoptable", () => {
   });
 
   test("dead AND stale is romp's past, not its board", () => {
-    expect(pickRompAdoptable([info(SID_B, 3 * DAY)], reg, new Set(), { max: 10, nowMs: NOW })).toEqual([]);
+    expect(pickRompAdoptable([info(SID_B, 3 * HOUR)], reg, new Set(), { max: 10, nowMs: NOW })).toEqual([]);
   });
 });

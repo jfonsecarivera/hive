@@ -50,12 +50,14 @@ export function adoptMode(rompSize: number, coldStartDone: boolean, env: string 
 }
 
 // The romp merge: the board mirrors what romp's dashboard actually SHOWS — the
-// sessions its kernel holds (`alive` on the sdk record), plus a short transcript-
-// freshness grace for the just-ended/mid-revive edge (verified live 2026-08-19: alive
-// gave 12 of the visible 13; the 13th was working that minute). Named-but-dead-and-
-// stale sessions are romp's past, not its board. Cap bounds it, newest-first, and
-// known ids never slide the window deeper.
-export const ROMP_GRACE_MS = 24 * 3600_000;
+// sessions its kernel holds (`alive` on the sdk record), plus any session whose
+// transcript is STILL BEING WRITTEN (tmux-backend sessions have no sdk record at all;
+// an actively-driven one keeps its mtime fresh forever). Measured live 2026-08-19:
+// alive gave 12 of the visible 13, the 13th was at 0.0h, and every unwanted straggler
+// was ≥2.8h stale — one hour splits them cleanly. Named-but-dead-and-stale sessions
+// are romp's past, not its board. Cap bounds it, newest-first, and known ids never
+// slide the window deeper.
+export const ROMP_GRACE_MS = Number(process.env.HIVE_ROMP_GRACE_H || 1) * 3600_000;
 
 export function pickRompAdoptable(
   infos: SDKSessionInfo[],
