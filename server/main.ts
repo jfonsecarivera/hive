@@ -91,6 +91,8 @@ function handle(ws: Bun.ServerWebSocket<WsData>, op: ClientOp) {
       break;
     }
     case "send":
+      // hive's own composer commands (e.g. /duty) are handled here, never sent to the model
+      if (hub.dutyCommand(op.sid, op.text)) break;
       hub.must(op.sid).send(op.text);
       break;
     case "interrupt":

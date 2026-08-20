@@ -3,9 +3,11 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { adoptGoal, adoptMode, adoptName, historyToEvents, pickAdoptable, pickRompAdoptable } from "./adopt";
+import { dutyDue, dutyLine, parseDutyCommand } from "./duty";
 import { TranscriptMirror } from "./mirror";
 import { readRompRegistry } from "./romp";
 import { AgentSession } from "./session";
+import { hiveMcpServer, type BoardAccess } from "./tools";
 import { Store, type SessionRow } from "./store";
 import { EFFORTS, MODELS, type ChatEvent, type ClientOp, type Defaults, type ModelChoice, type ServerMsg, type SessionSnap } from "./proto";
 
@@ -48,6 +50,76 @@ export class Hub {
     // …and MIRROR the ones something else is driving: a transcript being appended is a
     // running session, whoever the controller — the board and chat show it live
     new TranscriptMirror(() => this.sessions.values()).start();
+    // duties: the 30s tick only PROPOSES a round — dutyDue disposes on the session's
+    // actual state, so rounds never pile onto a running turn
+    for (const d of this.store.allDuties()) this.duties.set(d.sid, { everyS: d.every_s, prompt: d.prompt, lastRunT: d.last_run_t });
+    setInterval(() => this.dutyTick(), 30_000);
+  }
+
+  private duties = new Map<string, { everyS: number; prompt: string; lastRunT: number }>();
+
+  private dutyTick() {
+    const nowS = Math.floor(Date.now() / 1000);
+    for (const [sid, d] of this.duties) {
+      const s = this.sessions.get(sid);
+      if (!s) { this.duties.delete(sid); this.store.delDuty(sid); continue; }   // the bean is gone → so is its job
+      if (!dutyDue(d.lastRunT, d.everyS, s.stateNow(), nowS)) continue;
+      d.lastRunT = nowS;
+      this.store.touchDuty(sid, nowS);
+      try { s.send(d.prompt); } catch { /* a dead session revives on the next round */ }
+      this.scheduleHive();
+    }
+  }
+
+  // the /duty composer command — hive's own, never forwarded to the model
+  dutyCommand(sid: string, text: string): boolean {
+    const cmd = parseDutyCommand(text);
+    if (!cmd) return false;
+    const s = this.must(sid);
+    const nowS = Math.floor(Date.now() / 1000);
+    if (cmd.kind === "set") {
+      this.duties.set(sid, { everyS: cmd.spec.everyS, prompt: cmd.spec.prompt, lastRunT: nowS });
+      this.store.setDuty(sid, cmd.spec.everyS, cmd.spec.prompt, nowS);
+      s.note(`on duty — every ${cmd.spec.everyS >= 3600 ? cmd.spec.everyS / 3600 + "h" : cmd.spec.everyS / 60 + "m"}: ${cmd.spec.prompt.slice(0, 140)}${cmd.spec.prompt.length > 140 ? "…" : ""} (first round starting now)`);
+      try { s.send(cmd.spec.prompt); } catch { /* revives next round */ }
+    } else if (cmd.kind === "off") {
+      const had = this.duties.delete(sid);
+      this.store.delDuty(sid);
+      s.note(had ? "off duty — the loop is retired" : "this session had no duty");
+    } else if (cmd.kind === "status") {
+      const d = this.duties.get(sid);
+      s.note(d ? dutyLine(d.everyS, d.lastRunT, nowS) : 'no duty — set one with "/duty every 10m <the job>"');
+    } else {
+      s.note(cmd.message, "err");
+    }
+    this.persist(sid);
+    this.publishHive();
+    return true;
+  }
+
+  // what the hive MCP tools see and do — every session gets these (tools.ts)
+  private board(): BoardAccess {
+    const nowS = () => Math.floor(Date.now() / 1000);
+    return {
+      list: () => [...this.sessions.values()].map((s) => {
+        const sn = s.snap();
+        return { name: sn.name, state: sn.state, goal: sn.goal, idleS: nowS() - sn.lastT, duty: this.duties.has(sn.sid) };
+      }),
+      read: (name, n) => {
+        const t = [...this.sessions.values()].find((x) => x.name === name);
+        return t ? this.store.events(t.sid).slice(-n) : null;
+      },
+      send: (fromSid, name, message) => {
+        const from = this.sessions.get(fromSid);
+        const t = [...this.sessions.values()].find((x) => x.name === name);
+        if (!t) return `no session named "${name}" on this board`;
+        if (t.sid === fromSid) return "that's you — no self-messaging";
+        try {
+          t.send(`(from your teammate "${from?.name || "a peer"}") ${message}`);
+          return null;
+        } catch (e) { return String((e as Error)?.message || e); }
+      },
+    };
   }
 
   private async adopt() {
@@ -142,13 +214,16 @@ export class Hub {
       this.models = models;
       this.publish("hive", this.defaultsMsg());
     };
+    s.mcp = () => hiveMcpServer(s.sid, this.board());
   }
 
   modelChoices(): ModelChoice[] { return this.models; }
 
   capsMsg(sid: string): string {
     const s = this.sessions.get(sid);
-    return JSON.stringify({ type: "caps", sid, commands: s ? s.commands : [] } satisfies ServerMsg);
+    // hive's own composer commands ride the same menu as the session's slash commands
+    const builtins = [{ name: "/duty", description: "run this session's job on a loop (hive)", argumentHint: "every 10m <job> · off" }];
+    return JSON.stringify({ type: "caps", sid, commands: s ? [...builtins, ...s.commands] : [] } satisfies ServerMsg);
   }
 
   private persist(sid: string) {
@@ -168,7 +243,12 @@ export class Hub {
   }
 
   snapshot(): SessionSnap[] {
-    return [...this.sessions.values()].map((s) => s.snap());
+    return [...this.sessions.values()].map((s) => {
+      const sn = s.snap();
+      const d = this.duties.get(sn.sid);
+      if (d) sn.duty = { everyS: d.everyS, nextT: d.lastRunT + d.everyS };
+      return sn;
+    });
   }
 
   hiveMsg(): string {
@@ -234,6 +314,8 @@ export class Hub {
   end(sid: string) {
     const s = this.must(sid);
     s.end();
+    this.duties.delete(sid);       // trashing the bean IS retiring its job
+    this.store.delDuty(sid);
     this.persist(sid);
     this.sessions.delete(sid);
     this.publishHive();

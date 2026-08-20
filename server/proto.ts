@@ -33,6 +33,7 @@ export interface SessionSnap {
   doneT: number;
   todos: TodoItem[];              // the agent's own to-do list (TodoWrite), latest write wins
   bg: BgTask[];                   // live background tasks (SDK replace-semantics set)
+  duty: { everyS: number; nextT: number } | null;   // the standing job, when this bean has one
   topIds: string[];
   doneTopIds: string[];
   model: string;

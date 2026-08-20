@@ -13,7 +13,7 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { delegate } from "./actions";
 import { assignSlots, axialToXZ, frameDt, frameRadius, HEX_SIZE, hexCorner, hexDistance, latticeSegments, PAD_R, PAD_THETA, RIM_THETA, ringOf, slotOfAxial, spiralSlot, xzToAxial } from "./hive-layout";
-import { diffSessions, finishedLine, foldEnding, foldSeenAsk, foldSeenDone, isFaded, isKnownState, stateLine, type HiveSession, type SeenDone } from "./hive-model";
+import { diffSessions, finishedLine, foldEnding, foldSeenAsk, foldSeenDone, hiveAge, isFaded, isKnownState, stateLine, type HiveSession, type SeenDone } from "./hive-model";
 import type { ClientOp, Defaults, ModelChoice } from "../server/proto";
 
 // what the world needs from the page around it — the whole outside contract
@@ -198,6 +198,7 @@ class Pad {
     this.group.add(this.carrier);
     this.fadedCur = isFaded(sess, Math.floor(Date.now() / 1000));
     this.guy.setState(this.guyState(), this.fadedCur);
+    this.guy.setDuty(!!sess.duty);
 
     // one flat pick list per pad, tagged for the world's single-raycast hover
     this.padMesh.userData = { sid: sess.sid, kind: "pad" };
@@ -230,6 +231,7 @@ class Pad {
   apply(sess: HiveSession, stateChanged: boolean): boolean {
     const prevName = this.sess.name, prevColor = this.sess.color?.bg;
     this.sess = sess;
+    this.guy.setDuty(!!sess.duty);
     if (stateChanged) {
       this.ringTarget.setHex(stColor(sess.state));
       this.guy.setState(this.guyState(), this.fadedCur);
@@ -383,6 +385,7 @@ class Dweller {
   private orb!: THREE.Mesh;                 // awaitingBg: spinning gem overhead
   private orbMat!: THREE.MeshBasicMaterial;
   private desk: THREE.Group;                // tiny desk + glowing laptop — the "working" silhouette
+  private hat: THREE.Group;                 // the hard-hat: this bean holds a standing duty
   private screenMat: THREE.MeshStandardMaterial;
   private state: string = "ready";
   private faded = false;
@@ -494,7 +497,27 @@ class Dweller {
     this.desk.rotation.y = Math.PI;         // screen faces the bean
     this.desk.visible = false;
     this.group.add(this.desk);
+
+    // the hard-hat: a bean with a standing duty wears it — one glance says "on the job".
+    // Rides the TORSO so leans and squash carry it like a worn thing, not a decal.
+    this.hat = new THREE.Group();
+    const hatMat = new THREE.MeshStandardMaterial({
+      color: 0xf4c430, roughness: 0.35, metalness: 0.2,
+      emissive: 0xf4c430, emissiveIntensity: 0.12,
+    });
+    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.315, 0.335, 0.035, 18), hatMat);
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(0.235, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), hatMat);
+    dome.position.y = 0.012;
+    const ridge = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.4), hatMat);
+    ridge.position.y = 0.2;
+    this.hat.add(brim, dome, ridge);
+    this.hat.position.set(0, 1.12, -0.02);
+    this.hat.rotation.x = 0.06;
+    this.hat.visible = false;
+    this.torso.add(this.hat);
   }
+
+  setDuty(on: boolean) { this.hat.visible = on; }
 
   setState(s: string, faded: boolean) {
     if (this.state === "opening" && s !== "opening") {
@@ -1656,9 +1679,17 @@ export class HiveWorld {
     }
     const changed = new Set(diff.stateChanged.map((c) => c.sid));
     const nowS = Math.floor(Date.now() / 1000);
+    const pm = new Map(prevSessions.map((p) => [p.sid, p] as const));
     for (const s of sessions) {
       const pad = this.pads.get(s.sid);
       if (pad && !diff.added.includes(s.sid) && pad.apply(s, changed.has(s.sid))) this.rayDirty = true;
+      // taking up a duty is a moment: the hat lands with a golden burst and a wave
+      const was = pm.get(s.sid);
+      if (pad && was && !was.duty && s.duty) {
+        const at = pad.group.position.clone().setY(PAD_H + 1.4);
+        this.particles.burst(at, [0xf4c430, 0xffe28a, ACCENT], 30, 3.2);
+        pad.wave();
+      }
       if (this.selected === s.sid) this.card.refresh(s, nowS);
     }
     // the unseen-finished latch: completions the user hasn't gone to look at wear the ✓
@@ -1850,10 +1881,15 @@ export class HiveWorld {
           ((p.x * 0.5 + 0.5) * rr.width + rr.left).toFixed(1) + "px, " +
           ((0.5 - p.y * 0.5) * rr.height + rr.top).toFixed(1) + "px)";
         this.tipEl.classList.add("show");
-        // an unseen finish outranks the plain "ready" line: the tip says what the ✓ means
+        // an unseen finish outranks the plain "ready" line: the tip says what the ✓ means;
+        // an idle DUTY bean says when its next round fires instead of a bare "ready"
+        const tnow = Math.floor(Date.now() / 1000);
         const done = tipPad.unseenDone && tipPad.sess.state === "ready";
-        const line = done ? finishedLine(tipPad.sess, Math.floor(Date.now() / 1000))
-                          : stateLine(tipPad.sess, Math.floor(Date.now() / 1000));
+        const dutyIdle = !done && tipPad.sess.duty
+          && (tipPad.sess.state === "ready" || tipPad.sess.state === "awaitingBg");
+        const line = done ? finishedLine(tipPad.sess, tnow)
+          : dutyIdle ? `on duty — next round in ${hiveAge(Math.max(0, tipPad.sess.duty!.nextT - tnow))}`
+          : stateLine(tipPad.sess, tnow);
         if (line !== this.tipText) {
           this.tipText = line;
           (this.tipEl.querySelector(".tip-state") as HTMLElement).textContent = line;

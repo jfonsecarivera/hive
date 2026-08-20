@@ -48,6 +48,10 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS chat_sid_seq ON chat(sid, seq);
       CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
+      CREATE TABLE IF NOT EXISTS duties(
+        sid TEXT PRIMARY KEY, every_s INTEGER NOT NULL, prompt TEXT NOT NULL,
+        last_run_t INTEGER DEFAULT 0, created_t INTEGER
+      );
     `);
     this.seq = (this.db.query("SELECT COALESCE(MAX(seq),0) AS m FROM chat").get() as any).m;
   }
@@ -97,6 +101,24 @@ export class Store {
       "SELECT json FROM chat WHERE sid = $sid ORDER BY seq DESC LIMIT $limit",
     ).all({ $sid: sid, $limit: limit }) as { json: string }[];
     return rows.reverse().map((r) => JSON.parse(r.json) as ChatEvent);
+  }
+
+  setDuty(sid: string, everyS: number, prompt: string, nowT: number) {
+    this.db.query(`INSERT INTO duties(sid, every_s, prompt, last_run_t, created_t)
+      VALUES($sid,$e,$p,$t,$t)
+      ON CONFLICT(sid) DO UPDATE SET every_s=$e, prompt=$p`).run({ $sid: sid, $e: everyS, $p: prompt, $t: nowT });
+  }
+
+  delDuty(sid: string) {
+    this.db.query("DELETE FROM duties WHERE sid = $sid").run({ $sid: sid });
+  }
+
+  touchDuty(sid: string, t: number) {
+    this.db.query("UPDATE duties SET last_run_t = $t WHERE sid = $sid").run({ $sid: sid, $t: t });
+  }
+
+  allDuties(): { sid: string; every_s: number; prompt: string; last_run_t: number }[] {
+    return this.db.query("SELECT sid, every_s, prompt, last_run_t FROM duties").all() as any;
   }
 
   kvGet(k: string): string | null {

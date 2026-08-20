@@ -3,7 +3,7 @@
 // events only — session_state_changed, status, api_retry, result, a pending ask —
 // never on timers (the romp design rule this app inherits).
 import { existsSync, mkdirSync } from "node:fs";
-import { query, type ModelInfo, type Options, type PermissionResult, type PermissionUpdate, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type McpSdkServerConfigWithInstance, type ModelInfo, type Options, type PermissionResult, type PermissionUpdate, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AskQuestion, BgTask, ChatEvent, CmdInfo, ModelChoice, SessionSnap, TodoItem, WireState } from "./proto";
 
 const INPUT_CAP = 2000;
@@ -164,6 +164,7 @@ export class AgentSession {
   onChange: (sid: string) => void = () => {};
   onCaps: (sid: string) => void = () => {};                 // commands list changed
   onModels: (models: ModelChoice[]) => void = () => {};     // the live model roster
+  mcp: (() => McpSdkServerConfigWithInstance) | null = null;   // the hive board tools (hub injects)
 
   constructor(init: SessionInit) {
     this.sid = init.sid;
@@ -193,7 +194,7 @@ export class AgentSession {
       narration: (this.inflight || this.mirrorBusy) && this.turnStart
         ? { since: this.turnStart, toolUses: this.turnTools } : null,
       needsYou: this.asks.size > 0, needsYouT: this.newestAskT(), liveAsk: this.asks.size > 0,
-      doneT: this.doneT, todos: this.todos, bg: this.bg,
+      doneT: this.doneT, todos: this.todos, bg: this.bg, duty: null,   // hub overlays duty
       topIds: [...this.topIds].sort(), doneTopIds: [...this.doneTopIds].sort(),
       model: this.model, effort: this.effort, permMode: this.permMode, cwd: this.cwd,
       cost: this.costBase + this.costLive,
@@ -254,9 +255,11 @@ export class AgentSession {
 
   private emit(ev: ChatEvent) { this.onEvent(this.sid, ev); }
 
-  private note(text: string, tone: "info" | "err" = "info") {
+  note(text: string, tone: "info" | "err" = "info") {
     this.emit({ k: "note", id: `n${++this.evn}-${Date.now().toString(36)}`, t: now(), text, tone });
   }
+
+  stateNow(): string { return this.state; }
 
   // ── the SDK client ───────────────────────────────────────────────────────────
 
@@ -295,6 +298,7 @@ export class AgentSession {
     };
     if (this.model && this.model !== "default") opts.model = this.model;
     if (this.claudeSessionId) opts.resume = this.claudeSessionId;
+    if (this.mcp) opts.mcpServers = { hive: this.mcp() };
     this.q = query({ prompt: this.inputs(), options: opts });
     this.drain(this.q);
     // dynamic capabilities, from the session itself (never a hardcoded copy): the live

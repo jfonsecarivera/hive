@@ -180,6 +180,10 @@ export class ChatDock {
     if (!this.renaming) this.head.name.textContent = s.name;
     this.head.name.style.color = s.color.bg;
     const bits = [stateLine(s, now), s.model + " · " + s.effort];
+    if (s.duty) {
+      const e = s.duty.everyS;
+      bits.push(`duty every ${e >= 3600 ? e / 3600 + "h" : e / 60 + "m"}`);
+    }
     if (s.cost > 0) bits.push("$" + (s.cost < 10 ? s.cost.toFixed(2) : s.cost.toFixed(1)));
     this.head.sub.textContent = bits.join("  ·  ");
     this.head.sub.dataset.state = isKnownState(s.state) ? s.state : "unknown";

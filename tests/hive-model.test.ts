@@ -5,7 +5,7 @@ function sess(over: Partial<HiveSession> = {}): HiveSession {
   return {
     sid: "s1", name: "web", color: { bg: "#1EA1EB", fg: "#10141a" },
     state: "ready", lastT: 9_990, goal: null, brief: null, narration: null,
-    needsYou: false, needsYouT: 0, liveAsk: false, doneT: 0, todos: [], bg: [],
+    needsYou: false, needsYouT: 0, liveAsk: false, doneT: 0, todos: [], bg: [], duty: null,
     topIds: [], doneTopIds: [], model: "fable", effort: "max",
     permMode: "bypassPermissions", cwd: "/tmp", cost: 0,
     ...over,
