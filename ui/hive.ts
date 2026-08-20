@@ -12,7 +12,6 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { delegate } from "./actions";
-import { DOCK_W } from "./chat";
 import { assignSlots, axialToXZ, frameDt, frameRadius, HEX_SIZE, hexCorner, hexDistance, latticeSegments, PAD_R, PAD_THETA, RIM_THETA, ringOf, slotOfAxial, spiralSlot, xzToAxial } from "./hive-layout";
 import { diffSessions, finishedLine, foldEnding, foldSeenAsk, foldSeenDone, isFaded, isKnownState, stateLine, type HiveSession, type SeenDone } from "./hive-model";
 import type { ClientOp, Defaults, ModelChoice } from "../server/proto";
@@ -21,6 +20,7 @@ import type { ClientOp, Defaults, ModelChoice } from "../server/proto";
 export interface Bridge {
   op(o: ClientOp): void;                 // fire an op at the server
   openChat(sid: string): void;           // reveal the chat dock on this session
+  closeChat(): void;                     // a clean click on empty ground dismisses it
 }
 
 // ── status palette. WebGL can't read CSS vars, so the values are pinned here; the romp
@@ -1007,6 +1007,10 @@ export class HiveWorld {
   private portraitSid: string | null = null;
   private fogCur = 0.013;
   private shiftCur = 0;
+  private dockW = 460;                      // the dock's MEASURED width (boot observes it):
+                                            // at ~a third of the viewport, the centering
+                                            // math lands the face on the right third line
+  private pressedEmpty: { x: number; y: number } | null = null;
   private tipV = new THREE.Vector3();       // scratch — the hot loop allocates nothing
   // The quality governor separates two different facts (conflating them stripped the
   // neon for nothing, 2026-08-19): the frame INTERVAL (how often the browser gives us a
@@ -1253,13 +1257,16 @@ export class HiveWorld {
       }
       this.pressedPad = { sid, x: e.clientX, y: e.clientY, bean: hit.bean, name: hit.name };
     } else {
+      this.pressedEmpty = { x: e.clientX, y: e.clientY };
       this.dragging = { mode: "orbit", x: e.clientX, y: e.clientY };
     }
   }
 
   private onPointerUp(e: PointerEvent) {
     const pp = this.pressedPad;
+    const pe = this.pressedEmpty;
     this.pressedPad = null;
+    this.pressedEmpty = null;
     this.dragging = null;
     if (this.dragSession) { this.dropSessionDrag(this.dragSession.over); return; }
     if (pp && Math.hypot(e.clientX - pp.x, e.clientY - pp.y) <= 5) {
@@ -1267,7 +1274,18 @@ export class HiveWorld {
       // else on the cell — hexagon or bean — opens the chat
       if (pp.name) this.beginBoardRename(pp.sid);
       else this.openChat(pp.sid);
+      return;
     }
+    // a clean click on EMPTY ground dismisses what's up — the card first, then the
+    // chat/portrait (a drag is a camera move and dismisses nothing)
+    if (pe && Math.hypot(e.clientX - pe.x, e.clientY - pe.y) <= 5) {
+      if (this.selected) this.deselect();
+      else if (this.portraitSid) this.bridge.closeChat();
+    }
+  }
+
+  setDockWidth(px: number) {
+    if (px > 40) this.dockW = px;
   }
 
   private beginSessionDrag(sid: string) {
@@ -1852,10 +1870,15 @@ export class HiveWorld {
     const fog = this.scene.fog as THREE.FogExp2;
     this.fogCur = ease(this.fogCur, pPad ? 0.085 : 0.013, dt, 4);
     fog.density = this.fogCur;
-    this.shiftCur = ease(this.shiftCur, pPad ? DOCK_W : 0, dt, 5);
+    // rule of thirds: the dock owns the left third (its CSS width ≈ 33vw, measured by
+    // boot), so centering the face in the REMAINING space lands it on the right third
+    // line; the vertical offset eases the eyes up toward the top third with it
+    this.shiftCur = ease(this.shiftCur, pPad ? this.dockW : 0, dt, 5);
     const rw = this.root.clientWidth || 1, rh = this.root.clientHeight || 1;
-    if (this.shiftCur > 0.5) this.camera.setViewOffset(rw, rh, -this.shiftCur / 2, 0, rw, rh);
-    else this.camera.clearViewOffset();
+    if (this.shiftCur > 0.5) {
+      const rise = (this.shiftCur / this.dockW) * (rh / 6);
+      this.camera.setViewOffset(rw, rh, -this.shiftCur / 2, rise, rw, rh);
+    } else this.camera.clearViewOffset();
 
     // idle drift: after 6s hands-off the whole board breathes on a slow orbital sway
     // (never during a portrait — a close-up must hold still)

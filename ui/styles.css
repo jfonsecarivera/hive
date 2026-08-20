@@ -252,7 +252,8 @@ button { font-family: inherit; }
    Slides from the left; the world shifts right so the beans stay visible. One
    conversation surface: prose, folded thinking, grouped tool activity, ask cards. */
 #chat-dock {
-  position: fixed; top: 0; left: 0; bottom: 0; width: 460px; z-index: 10;
+  /* the left THIRD of the viewport (rule of thirds — the portrait composes against it) */
+  position: fixed; top: 0; left: 0; bottom: 0; width: clamp(380px, 33.4vw, 560px); z-index: 10;
   display: flex; flex-direction: column;
   /* flat glass, no backdrop blur: a full-height blur over an animating canvas
      forces a recomposite every frame — the single biggest smoothness tax */

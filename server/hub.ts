@@ -72,8 +72,11 @@ export class Hub {
     if (!picks.length) return;
     const used = new Set([...this.sessions.values()].map((s) => s.name));
     const d = this.store.getDefaults();
+    const takenRomp = new Set<string>();     // one bean per romp session, however many ids it wore
     for (const info of picks) {
       const r = romp.get(info.sessionId);
+      if (r && (takenRomp.has(r.id) || r.ids.some((id) => known.has(id)))) continue;
+      if (r) { takenRomp.add(r.id); for (const id of r.ids) known.add(id); }
       let name = r?.name || adoptName(info, used);
       if (used.has(name)) name = adoptName({ ...info, customTitle: name }, used);
       used.add(name);

@@ -17,6 +17,7 @@ function fixtureDir(): string {
   writeFileSync(join(dir, "names", SID_A), "web\t/home/user/dev/notes-api\t#98998A\tblack\n");
   writeFileSync(join(dir, "sdk", SID_A + ".json"), JSON.stringify({
     sid: SID_A, name: "web", mode: "bypassPermissions", effort: "max", model: "fable", spawnedAt: 1700000000,
+    lastSid: "12121212-3434-5656-7878-909090909090",
   }));
   writeFileSync(join(dir, "names", SID_B), "api\t/home/user/dev/notes-api\t#F85B5A\twhite\n");
   writeFileSync(join(dir, "names", "not-a-session-id"), "junk\t/x\t#000000\twhite\n");
@@ -25,12 +26,14 @@ function fixtureDir(): string {
 }
 
 describe("readRompRegistry", () => {
-  test("parses names + sdk meta, maps fg words, skips junk", () => {
+  test("parses names + sdk meta, maps fg words, indexes lastSid, skips junk", () => {
     const reg = readRompRegistry(fixtureDir());
-    expect(reg.size).toBe(2);
+    expect(reg.size).toBe(3);                  // web (by sid AND by lastSid) + api
+    expect(reg.get("12121212-3434-5656-7878-909090909090")?.name).toBe("web");
     const a = reg.get(SID_A)!;
     expect(a).toEqual({
-      id: SID_A, name: "web", cwd: "/home/user/dev/notes-api", bg: "#98998A", fg: "#10141a",
+      id: SID_A, ids: [SID_A, "12121212-3434-5656-7878-909090909090"],
+      name: "web", cwd: "/home/user/dev/notes-api", bg: "#98998A", fg: "#10141a",
       model: "fable", effort: "max", permMode: "bypassPermissions", spawnedAt: 1700000000,
     });
     const b = reg.get(SID_B)!;                 // tmux-backend: names line only

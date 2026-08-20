@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 export interface RompSession {
   id: string;                 // the claude session id (names/ filename)
+  ids: string[];              // every claude id this session has worn (sid + lastSid)
   name: string;
   cwd: string;
   bg: string;                 // identity color; "" when unparsable
@@ -37,18 +38,26 @@ export function readRompRegistry(dir = rompStateDir()): Map<string, RompSession>
         .split("\n")[0].split("\t").map((v) => (v || "").trim());
       if (!name) continue;
       const rec: RompSession = {
-        id: f, name, cwd: cwd || "",
+        id: f, ids: [f], name, cwd: cwd || "",
         bg: /^#[0-9a-fA-F]{6}$/.test(bg) ? bg : "",
         fg: FG_WORDS[fg] || (fg.startsWith("#") ? fg : "#ffffff"),
       };
+      let lastSid = "";
       try {
         const sdk = JSON.parse(readFileSync(join(dir, "sdk", f + ".json"), "utf8"));
         if (typeof sdk.model === "string" && sdk.model) rec.model = sdk.model;
         if (typeof sdk.effort === "string" && sdk.effort) rec.effort = sdk.effort;
         if (typeof sdk.mode === "string" && sdk.mode) rec.permMode = sdk.mode;
         if (Number.isFinite(sdk.spawnedAt)) rec.spawnedAt = Number(sdk.spawnedAt);
+        if (typeof sdk.lastSid === "string") lastSid = sdk.lastSid;
       } catch { /* a tmux-backend session: the names line is all there is */ }
       out.set(f, rec);
+      // a /clear (or certain restarts) moves the LIVE transcript to a new claude id —
+      // romp tracks it as lastSid; index it too so the current transcript still matches
+      if (lastSid && lastSid !== f && !out.has(lastSid)) {
+        rec.ids.push(lastSid);
+        out.set(lastSid, rec);
+      }
     } catch { /* one unreadable entry never blocks the rest */ }
   }
   return out;

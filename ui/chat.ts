@@ -13,8 +13,6 @@ import { isKnownState, stateLine, type HiveSession } from "./hive-model";
 import { renderMarkdown } from "./markdown";
 import type { ChatEvent, ClientOp, CmdInfo } from "../server/proto";
 
-export const DOCK_W = 460;
-
 interface Row { ev: ChatEvent; el: HTMLElement }
 
 export class ChatDock {

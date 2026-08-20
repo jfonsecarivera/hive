@@ -12,6 +12,7 @@ const splash = document.getElementById("splash");
 const bridge: Bridge = {
   op: (o) => net.op(o),
   openChat: (sid) => dock.open(sid),
+  closeChat: () => dock.close(),
 };
 
 const world = new HiveWorld(root, bridge);
@@ -19,6 +20,10 @@ const tray = new Tray(world, bridge);
 const dock = new ChatDock((o) => net.op(o));
 // closing the chat ends the portrait; opening happens through world.openChat itself
 dock.onOpenChange = (open) => { if (!open) world.exitPortrait(); };
+// the dock owns the viewport's left third (CSS clamp) — the world composes around
+// its MEASURED width, so the portrait lands on the thirds at any window size
+world.setDockWidth(dock.el.offsetWidth);
+new ResizeObserver(() => world.setDockWidth(dock.el.offsetWidth)).observe(dock.el);
 
 // the reconnect chip: honest about a dead server, quiet otherwise
 const conn = document.createElement("div");
