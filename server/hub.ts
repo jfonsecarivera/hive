@@ -45,6 +45,7 @@ export class Hub {
       this.wire(s);
       this.sessions.set(s.sid, s);
     }
+    this.notifyCutSessions();
     // (no display-refresh timer: "faded" derives client-side from lastT at render time)
     // adopt the machine's existing Claude Code sessions (romp, terminal, anything) as
     // dormant beans — at boot and then on a slow rescan for sessions born elsewhere
@@ -464,12 +465,46 @@ export class Hub {
     return d;
   }
 
-  // server going down: cut clients without archiving — every session revives on restart
-  shutdown() {
+  // how many sessions are mid-turn — the number a restart would cut
+  busyCount(): number {
+    let n = 0;
     for (const s of this.sessions.values()) {
+      const st = s.stateNow();
+      if (st === "working" || st === "compacting" || st === "clearing" || st === "interrupting") n++;
+    }
+    return n;
+  }
+
+  // server going down: cut clients without archiving — every session revives on restart.
+  // Sessions cut MID-TURN are remembered so the next boot can tell them the truth.
+  shutdown() {
+    const cut: string[] = [];
+    for (const s of this.sessions.values()) {
+      const st = s.stateNow();
+      if (st === "working" || st === "compacting" || st === "clearing") cut.push(s.sid);
       s.shutdown();
       this.persist(s.sid);
     }
+    this.store.kvSet("cutMidTurn", JSON.stringify(cut));
+  }
+
+  // boot-time honesty: a session that was cut mid-turn is told what happened and how to
+  // build daemons that survive it (fail loudly + steer to the robust pattern — its
+  // background tasks died as orphans and silence would read as a mystery)
+  private notifyCutSessions() {
+    const raw = this.store.kvGet("cutMidTurn");
+    if (!raw) return;
+    this.store.kvSet("cutMidTurn", "[]");
+    try {
+      for (const sid of JSON.parse(raw) as string[]) {
+        const s = this.sessions.get(sid);
+        if (!s || s.ended) continue;
+        s.note("the hive server restarted while you were mid-turn — your turn was cut and any " +
+          "background tasks you had started were killed as orphans. If you run long-lived " +
+          "watchers, launch them detached (setsid/nohup, writing to a log you re-read) so they " +
+          "survive restarts; your next round continues from your full context.", "err");
+      }
+    } catch { /* a malformed marker is not worth a crash */ }
   }
 }
 

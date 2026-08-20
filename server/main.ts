@@ -73,7 +73,7 @@ const server = Bun.serve<WsData>({
       const d = hub.store.getDefaults();
       return finish(Response.json({ models: hub.modelChoices(), efforts: EFFORTS.map((e) => ({ value: e })), defaults: { model: d.model, effort: d.effort } }));
     }
-    if (url.pathname === "/healthz") return finish(Response.json({ ok: true, sessions: hub.sessions.size }));
+    if (url.pathname === "/healthz") return finish(Response.json({ ok: true, sessions: hub.sessions.size, busy: hub.busyCount() }));
     if (url.pathname === "/perf" && req.method === "POST") {
       // the client's measured frame stats — the authoritative answer to "is it laggy",
       // logged AND kept in ~/.hive/perf.log so any machine's numbers can be read later
@@ -170,12 +170,27 @@ function handle(ws: Bun.ServerWebSocket<WsData>, op: ClientOp) {
   }
 }
 
-function bye() {
+// Graceful drain: a restart WAITS for mid-turn sessions to land before cutting clients
+// (every cut turn orphans the agent's background tasks — a duty three restarts deep
+// called this "why does this keep happening", 2026-08-19). systemd's TimeoutStopSec
+// must exceed HIVE_DRAIN_S; a second signal skips the wait.
+let draining = false;
+async function bye() {
+  if (draining) { hub.shutdown(); server.stop(true); process.exit(0); }
+  draining = true;
+  const deadline = Date.now() + Number(process.env.HIVE_DRAIN_S || 150) * 1000;
+  let n = hub.busyCount();
+  if (n > 0) console.log(`draining: waiting for ${n} mid-turn session${n === 1 ? "" : "s"} (signal again to skip)`);
+  while (n > 0 && Date.now() < deadline) {
+    await Bun.sleep(1000);
+    n = hub.busyCount();
+  }
+  if (n > 0) console.log(`drain timeout — cutting ${n} mid-turn session${n === 1 ? "" : "s"}`);
   hub.shutdown();
   server.stop(true);
   process.exit(0);
 }
-process.on("SIGINT", bye);
-process.on("SIGTERM", bye);
+process.on("SIGINT", () => void bye());
+process.on("SIGTERM", () => void bye());
 
 console.log(`hive up — http://localhost:${server.port}  (${hub.sessions.size} session${hub.sessions.size === 1 ? "" : "s"} revived)`);
