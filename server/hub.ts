@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { adoptGoal, adoptMode, adoptName, historyToEvents, pickAdoptable, pickRompAdoptable } from "./adopt";
 import { dutyDue, dutyLine, parseDutyCommand } from "./duty";
+import { fmtEvery, loadRoster, parseEvery, reconcileActions, saveRoster, type RosterEntry } from "./roster";
 import { TranscriptMirror } from "./mirror";
 import { readRompRegistry } from "./romp";
 import { AgentSession } from "./session";
@@ -54,6 +55,40 @@ export class Hub {
     // actual state, so rounds never pile onto a running turn
     for (const d of this.store.allDuties()) this.duties.set(d.sid, { everyS: d.every_s, prompt: d.prompt, lastRunT: d.last_run_t });
     setInterval(() => this.dutyTick(), 30_000);
+    // …and the ROSTER (saved duties — duties.json): reconcile at boot and on a slow
+    // tick, so the standing crew the user always wants re-summons itself
+    setTimeout(() => this.reconcileRoster(), 3_000);
+    setInterval(() => this.reconcileRoster(), 600_000);
+  }
+
+  private reconcileRoster() {
+    const roster = loadRoster();
+    if (!roster.size) return;
+    const live = [...this.sessions.values()].map((s) => {
+      const d = this.duties.get(s.sid);
+      return { name: s.name, everyS: d ? d.everyS : null, prompt: d ? d.prompt : null };
+    });
+    for (const a of reconcileActions(roster, live)) {
+      if (a.act === "summon") {
+        const s = this.create({
+          op: "create", name: a.name,
+          model: a.entry.model, effort: a.entry.effort, cwd: a.entry.cwd,
+        });
+        const everyS = parseEvery(a.entry.every)!;
+        this.duties.set(s.sid, { everyS, prompt: a.entry.prompt, lastRunT: Math.floor(Date.now() / 1000) });
+        this.store.setDuty(s.sid, everyS, a.entry.prompt, Math.floor(Date.now() / 1000));
+        s.note(`on duty (saved) — every ${a.entry.every}: ${a.entry.prompt.slice(0, 140)}${a.entry.prompt.length > 140 ? "…" : ""}`);
+        try { s.send(a.entry.prompt); } catch { /* first round retries on the tick */ }
+        console.log(`roster: summoned "${a.name}"`);
+      } else {
+        const s = [...this.sessions.values()].find((x) => x.name === a.name);
+        if (!s) continue;
+        this.duties.set(s.sid, { everyS: a.everyS, prompt: a.prompt, lastRunT: Math.floor(Date.now() / 1000) });
+        this.store.setDuty(s.sid, a.everyS, a.prompt, Math.floor(Date.now() / 1000));
+        s.note(`duty updated from the roster — every ${fmtEvery(a.everyS)}`);
+      }
+    }
+    this.publishHive();
   }
 
   private duties = new Map<string, { everyS: number; prompt: string; lastRunT: number }>();
@@ -80,15 +115,40 @@ export class Hub {
     if (cmd.kind === "set") {
       this.duties.set(sid, { everyS: cmd.spec.everyS, prompt: cmd.spec.prompt, lastRunT: nowS });
       this.store.setDuty(sid, cmd.spec.everyS, cmd.spec.prompt, nowS);
-      s.note(`on duty — every ${cmd.spec.everyS >= 3600 ? cmd.spec.everyS / 3600 + "h" : cmd.spec.everyS / 60 + "m"}: ${cmd.spec.prompt.slice(0, 140)}${cmd.spec.prompt.length > 140 ? "…" : ""} (first round starting now)`);
+      // a SAVED duty follows the composer: editing the job here updates its roster entry
+      const roster = loadRoster();
+      const saved = roster.get(s.name);
+      if (saved) {
+        roster.set(s.name, { ...saved, every: fmtEvery(cmd.spec.everyS), prompt: cmd.spec.prompt });
+        saveRoster(roster);
+      }
+      s.note(`on duty — every ${fmtEvery(cmd.spec.everyS)}: ${cmd.spec.prompt.slice(0, 140)}${cmd.spec.prompt.length > 140 ? "…" : ""}${saved ? " (roster updated)" : ""} (first round starting now)`);
       try { s.send(cmd.spec.prompt); } catch { /* revives next round */ }
+    } else if (cmd.kind === "save") {
+      const d = this.duties.get(sid);
+      if (!d) {
+        s.note('nothing to save — set the job first: "/duty every 10m <the job>"', "err");
+      } else {
+        const roster = loadRoster();
+        roster.set(s.name, {
+          every: fmtEvery(d.everyS), prompt: d.prompt,
+          model: s.model, effort: s.effort, cwd: s.cwd,
+        });
+        saveRoster(roster);
+        s.note(`saved — "${s.name}" is now a standing duty: it re-summons itself at every boot (duties.json)`);
+      }
     } else if (cmd.kind === "off") {
       const had = this.duties.delete(sid);
       this.store.delDuty(sid);
-      s.note(had ? "off duty — the loop is retired" : "this session had no duty");
+      const roster = loadRoster();
+      const wasSaved = roster.delete(s.name);
+      if (wasSaved) saveRoster(roster);
+      s.note(had ? `off duty — the loop is retired${wasSaved ? ", roster entry removed" : ""}` : "this session had no duty");
     } else if (cmd.kind === "status") {
       const d = this.duties.get(sid);
-      s.note(d ? dutyLine(d.everyS, d.lastRunT, nowS) : 'no duty — set one with "/duty every 10m <the job>"');
+      const saved = d && loadRoster().has(s.name);
+      s.note(d ? dutyLine(d.everyS, d.lastRunT, nowS) + (saved ? " · saved" : " · not saved (/duty save)")
+               : 'no duty — set one with "/duty every 10m <the job>"');
     } else {
       s.note(cmd.message, "err");
     }
@@ -222,7 +282,7 @@ export class Hub {
   capsMsg(sid: string): string {
     const s = this.sessions.get(sid);
     // hive's own composer commands ride the same menu as the session's slash commands
-    const builtins = [{ name: "/duty", description: "run this session's job on a loop (hive)", argumentHint: "every 10m <job> · off" }];
+    const builtins = [{ name: "/duty", description: "run this session's job on a loop (hive)", argumentHint: "every 10m <job> · save · off" }];
     return JSON.stringify({ type: "caps", sid, commands: s ? [...builtins, ...s.commands] : [] } satisfies ServerMsg);
   }
 
@@ -314,8 +374,10 @@ export class Hub {
   end(sid: string) {
     const s = this.must(sid);
     s.end();
-    this.duties.delete(sid);       // trashing the bean IS retiring its job
+    this.duties.delete(sid);       // trashing the bean IS retiring its job — roster included
     this.store.delDuty(sid);
+    const roster = loadRoster();
+    if (roster.delete(s.name)) saveRoster(roster);
     this.persist(sid);
     this.sessions.delete(sid);
     this.publishHive();

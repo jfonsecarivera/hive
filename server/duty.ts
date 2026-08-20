@@ -11,6 +11,7 @@ export interface DutySpec { everyS: number; prompt: string }
 
 export type DutyCommand =
   | { kind: "set"; spec: DutySpec }
+  | { kind: "save" }
   | { kind: "off" }
   | { kind: "status" }
   | { kind: "error"; message: string };
@@ -24,9 +25,10 @@ export function parseDutyCommand(text: string): DutyCommand | null {
   const rest = t.slice("/duty".length).trim();
   if (!rest) return { kind: "status" };
   if (rest === "off" || rest === "stop") return { kind: "off" };
+  if (rest === "save") return { kind: "save" };
   const m = /^every\s+(\d+)\s*(s|m|h)\s+([\s\S]+)$/.exec(rest);
   if (!m) {
-    return { kind: "error", message: 'usage: "/duty every 10m <the job>" · "/duty off" · "/duty"' };
+    return { kind: "error", message: 'usage: "/duty every 10m <the job>" · "/duty save" · "/duty off" · "/duty"' };
   }
   const everyS = Number(m[1]) * UNIT_S[m[2]];
   if (everyS < DUTY_MIN_S) return { kind: "error", message: "the shortest round is every 1m" };

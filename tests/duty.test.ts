@@ -9,6 +9,7 @@ describe("parseDutyCommand", () => {
     expect(parseDutyCommand("/duty every 2h summarize the board")).toEqual(
       { kind: "set", spec: { everyS: 7200, prompt: "summarize the board" } });
     expect(parseDutyCommand("/duty off")).toEqual({ kind: "off" });
+    expect(parseDutyCommand("/duty save")).toEqual({ kind: "save" });
     expect(parseDutyCommand("/duty")).toEqual({ kind: "status" });
     expect(parseDutyCommand("/duty every tuesday do things")!.kind).toBe("error");
     expect(parseDutyCommand("/duty every 30s too fast")!.kind).toBe("error");   // 1m floor
