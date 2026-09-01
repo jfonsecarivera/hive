@@ -44,6 +44,16 @@ export function spawnPlan(liveNames: string[], want: string, max = SPAWN_MAX_LIV
   return { ok: true, name: `${name}-${n}` };
 }
 
+// what hive_spawn accepts as a model: a live roster value, a classic alias (the CLI
+// still resolves these even when the roster renames its values), or any full model id
+// (claude-*) — the API is the authority on those, and it fails loudly on a bad one.
+const CLASSIC_ALIASES = new Set(["default", "fable", "opus", "sonnet", "haiku"]);
+
+export function spawnModelOk(model: string | undefined, roster: string[]): boolean {
+  if (!model || CLASSIC_ALIASES.has(model) || model.startsWith("claude-")) return true;
+  return roster.includes(model);
+}
+
 export function renderEvents(evs: ChatEvent[]): string {
   const lines: string[] = [];
   for (const ev of evs) {

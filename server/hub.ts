@@ -11,7 +11,7 @@ import { fmtEvery, loadRoster, parseEvery, saveRoster } from "./roster";
 import { TranscriptMirror } from "./mirror";
 import { readRompRegistry } from "./romp";
 import { AgentSession } from "./session";
-import { hiveMcpServer, notifyAllowed, spawnPlan, type BoardAccess } from "./tools";
+import { hiveMcpServer, notifyAllowed, spawnModelOk, spawnPlan, type BoardAccess } from "./tools";
 import { Store, type SessionRow } from "./store";
 import { EFFORTS, MODELS, type ChatEvent, type ClientOp, type Defaults, type ModelChoice, type ServerMsg, type SessionSnap } from "./proto";
 
@@ -286,15 +286,15 @@ export class Hub {
         const from = this.sessions.get(fromSid);
         const plan = spawnPlan([...this.sessions.values()].map((x) => x.name), o.name);
         if (!plan.ok) return { ok: false, text: plan.reason };
-        if (o.model && o.model !== "default" && !this.models.some((m) => m.value === o.model)) {
-          return { ok: false, text: `unknown model "${o.model}" — this hive offers: ${this.models.map((m) => m.value).join(", ")}` };
+        if (!spawnModelOk(o.model, this.models.map((m) => m.value))) {
+          return { ok: false, text: `unknown model "${o.model}" — this hive offers: ${this.models.map((m) => m.value).join(", ")}, or any full claude-* model id` };
         }
         try {
           const s = this.create({
             op: "create", name: plan.name, model: o.model, cwd: o.cwd || from?.cwd,
             prompt: `(spawned by your teammate "${from?.name || "a peer"}" on this hive — when the work is done, report the outcome back with hive_send) ${o.prompt}`,
           }, "spawned");
-          return { ok: true, text: `spawned "${s.name}" — live on the board and already working. Check on it with hive_board/hive_read; it reports back to you via hive_send.` };
+          return { ok: true, text: `spawned "${s.name}" (model ${s.model}) — live on the board and already working. Check on it with hive_board/hive_read; it reports back to you via hive_send.` };
         } catch (e) { return { ok: false, text: String((e as Error)?.message || e) }; }
       },
       nextRound: (fromSid, inS) => {

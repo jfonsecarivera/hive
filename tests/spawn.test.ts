@@ -1,5 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { SPAWN_MAX_LIVE, spawnPlan } from "../server/tools";
+import { SPAWN_MAX_LIVE, spawnModelOk, spawnPlan } from "../server/tools";
+
+describe("spawnModelOk — roster values, classic aliases, and full ids", () => {
+  const roster = ["default", "opus[1m]", "claude-fable-5[1m]", "sonnet", "haiku"];
+  test("classic aliases survive roster renames; full claude-* ids pass to the API", () => {
+    expect(spawnModelOk(undefined, roster)).toBe(true);
+    expect(spawnModelOk("fable", roster)).toBe(true);
+    expect(spawnModelOk("claude-fable-5-1", roster)).toBe(true);
+    expect(spawnModelOk("claude-fable-5[1m]", roster)).toBe(true);
+    expect(spawnModelOk("gpt-5", roster)).toBe(false);
+    expect(spawnModelOk("fabel", roster)).toBe(false);
+  });
+});
 
 describe("spawnPlan — the hive_spawn guard", () => {
   test("a free name passes verbatim", () => {
