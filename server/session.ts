@@ -91,7 +91,7 @@ export interface SessionInit {
   effort: string;
   permMode: string;
   cwd: string;
-  origin?: string;                // "hive" (default) | "adopted" — adopted beans are never fed queue work
+  origin?: string;                // "hive" (default) | "adopted" | "spawned" — only hive-born beans are fed queue work
   claudeSessionId?: string | null;
   createdT?: number;
   lastT?: number;

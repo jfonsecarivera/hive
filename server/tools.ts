@@ -14,6 +14,7 @@ export interface BoardAccess {
   nextRound(fromSid: string, inS: number): string;       // self-pacing; returns the confirmation/error line
   notify(fromSid: string, message: string): Promise<string>;   // ping the USER (rate-limited)
   eta(fromSid: string, name: string | undefined, patch: Record<string, string | undefined>): string;
+  spawn(fromSid: string, o: { name: string; prompt: string; model?: string; cwd?: string }): { ok: boolean; text: string };
 }
 
 // the notify spam guard — an agent loop must never be able to flood the user's phone.
@@ -23,6 +24,24 @@ export const NOTIFY_MAX_PER_HOUR = 4;
 export function notifyAllowed(sentAtMs: number[], nowMs: number): { ok: boolean; kept: number[] } {
   const kept = sentAtMs.filter((t) => nowMs - t < 3600_000);
   return { ok: kept.length < NOTIFY_MAX_PER_HOUR, kept };
+}
+
+// the spawn guard — an agent loop must never be able to flood the board with beans.
+// Name collisions suffix rather than fail: two managers wanting "evals" both get one.
+export const SPAWN_MAX_LIVE = 16;
+
+export function spawnPlan(liveNames: string[], want: string, max = SPAWN_MAX_LIVE):
+  { ok: true; name: string } | { ok: false; reason: string } {
+  const name = want.trim();
+  if (!name) return { ok: false, reason: "a spawned session needs a name" };
+  if (liveNames.length >= max) {
+    return { ok: false, reason: `the board is full (${liveNames.length} live sessions, cap ${max}) — a bean must finish and be dismissed first` };
+  }
+  const used = new Set(liveNames);
+  if (!used.has(name)) return { ok: true, name };
+  let n = 2;
+  while (used.has(`${name}-${n}`)) n++;
+  return { ok: true, name: `${name}-${n}` };
 }
 
 export function renderEvents(evs: ChatEvent[]): string {
@@ -94,6 +113,18 @@ export function hiveMcpServer(self: string, board: BoardAccess): McpSdkServerCon
         { in_seconds: z.number().int().min(1).describe("seconds until your next round"),
           reason: z.string().max(200).describe("one short line: why this timing") },
         async (a) => ({ content: [{ type: "text", text: board.nextRound(self, a.in_seconds) }] }),
+      ),
+      tool(
+        "hive_spawn",
+        "Create a NEW session on this hive board — a real bean the user can see, watch, and steer. Use this instead of in-process subagents whenever you delegate work: delegated work must be visible on the board. The new session starts on your prompt immediately and shares NONE of your context, so the prompt must carry the full brief. Tell it to report back to you by name with hive_send. It runs in your working directory unless you pass another. A taken name gets a numeric suffix; the result names the bean actually created.",
+        { name: z.string().min(1).max(40).describe("short kebab-case name for the bean, e.g. welfare-evals"),
+          prompt: z.string().min(1).max(8000).describe("the full task brief, self-contained — the new session knows nothing you don't tell it"),
+          model: z.string().optional().describe("fable | opus | sonnet | haiku — omit for the hive default"),
+          cwd: z.string().optional().describe("working directory; omit to use your own") },
+        async (a) => {
+          const r = board.spawn(self, { name: a.name, prompt: a.prompt, model: a.model, cwd: a.cwd });
+          return { content: [{ type: "text", text: r.text }], ...(r.ok ? {} : { isError: true }) };
+        },
       ),
       tool(
         "hive_send",

@@ -32,7 +32,10 @@ with a chat rebuilt from scratch. One Bun process, no kernel, no tmux, no panes.
   look gesture; trash-drop suppression holds a sid out until a payload omits it
   (`foldEnding`), with a loud backstop if the end didn't take.
 - **Drag and drop only** (the user, 2026-08-19): sessions are created by dragging a model
-  bean from the tray onto a hexagon. No picker, no modal, anywhere.
+  bean from the tray onto a hexagon. No picker, no modal, anywhere. One carve-out (the
+  user, 2026-08-31): agents delegate via the `hive_spawn` MCP tool, which creates a real
+  bean — delegated work must be VISIBLE on the board, never hidden in in-process
+  subagents. Spawned beans (`origin: "spawned"`) never take queue work.
 
 ## Romp is a MIGRATION SOURCE, never a dependency (the user, 2026-08-19)
 

@@ -3,9 +3,10 @@
 // on "ready" (the state-change event — never a timer) or the moment a task is filed
 // while one already sits ready. Feeding only, never hiring: the queue works the beans
 // the user already dragged onto the board — it cannot summon (the shelf rule), and it
-// never feeds an adopted bean (someone else's conversation on display) or a duty bean
-// (its loop owns its idle time). Pure logic here (tested); hub owns the store and the
-// triggers.
+// only feeds hive-born beans — never an adopted one (someone else's conversation on
+// display), never a spawned worker (its idle time belongs to its spawner), never a duty
+// bean (its loop owns its idle time). Pure logic here (tested); hub owns the store and
+// the triggers.
 
 export type QueueCommand =
   | { kind: "add"; tasks: string[] }
@@ -44,7 +45,7 @@ export interface WorkerView {
   sid: string;
   state: string;
   duty: boolean;
-  adopted: boolean;
+  origin: string;                // only "hive" beans take queue work
   steering: boolean;
   lastT: number;
 }
@@ -52,7 +53,7 @@ export interface WorkerView {
 export function pickWorker(ws: WorkerView[]): string | null {
   let best: WorkerView | null = null;
   for (const w of ws) {
-    if ((w.state !== "ready" && w.state !== "opening") || w.duty || w.adopted || w.steering) continue;
+    if ((w.state !== "ready" && w.state !== "opening") || w.duty || w.origin !== "hive" || w.steering) continue;
     if (!best || w.lastT < best.lastT) best = w;
   }
   return best ? best.sid : null;

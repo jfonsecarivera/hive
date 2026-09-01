@@ -24,7 +24,7 @@ export interface SessionRow {
   done_top_ids: string;
   cost: number;
   archived: number;
-  origin: string;                 // "hive" (dragged/summoned) | "adopted" — the queue feeds only hive-born beans
+  origin: string;                 // "hive" (dragged/summoned) | "adopted" | "spawned" (hive_spawn) — the queue feeds only hive-born beans
 }
 
 export class Store {

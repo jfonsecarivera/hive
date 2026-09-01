@@ -11,7 +11,7 @@ import { fmtEvery, loadRoster, parseEvery, saveRoster } from "./roster";
 import { TranscriptMirror } from "./mirror";
 import { readRompRegistry } from "./romp";
 import { AgentSession } from "./session";
-import { hiveMcpServer, notifyAllowed, type BoardAccess } from "./tools";
+import { hiveMcpServer, notifyAllowed, spawnPlan, type BoardAccess } from "./tools";
 import { Store, type SessionRow } from "./store";
 import { EFFORTS, MODELS, type ChatEvent, type ClientOp, type Defaults, type ModelChoice, type ServerMsg, type SessionSnap } from "./proto";
 
@@ -219,7 +219,7 @@ export class Hub {
       if (!item) return;
       const sid = pickWorker([...this.sessions.values()].map((s) => ({
         sid: s.sid, state: s.stateNow(), duty: this.duties.has(s.sid),
-        adopted: s.origin === "adopted", steering: s.steering(), lastT: s.lastT,
+        origin: s.origin, steering: s.steering(), lastT: s.lastT,
       })));
       if (!sid) return;
       const s = this.sessions.get(sid)!;
@@ -281,6 +281,21 @@ export class Hub {
           });
           return r.ok ? "notified" : `notification failed (${r.status})`;
         } catch (e) { return `notification failed: ${String((e as Error)?.message || e)}`; }
+      },
+      spawn: (fromSid, o) => {
+        const from = this.sessions.get(fromSid);
+        const plan = spawnPlan([...this.sessions.values()].map((x) => x.name), o.name);
+        if (!plan.ok) return { ok: false, text: plan.reason };
+        if (o.model && o.model !== "default" && !this.models.some((m) => m.value === o.model)) {
+          return { ok: false, text: `unknown model "${o.model}" — this hive offers: ${this.models.map((m) => m.value).join(", ")}` };
+        }
+        try {
+          const s = this.create({
+            op: "create", name: plan.name, model: o.model, cwd: o.cwd || from?.cwd,
+            prompt: `(spawned by your teammate "${from?.name || "a peer"}" on this hive — when the work is done, report the outcome back with hive_send) ${o.prompt}`,
+          }, "spawned");
+          return { ok: true, text: `spawned "${s.name}" — live on the board and already working. Check on it with hive_board/hive_read; it reports back to you via hive_send.` };
+        } catch (e) { return { ok: false, text: String((e as Error)?.message || e) }; }
       },
       nextRound: (fromSid, inS) => {
         const d = this.duties.get(fromSid);
@@ -489,7 +504,7 @@ export class Hub {
     return this.store.eventsBefore(sid, before);
   }
 
-  create(op: Extract<ClientOp, { op: "create" }>): AgentSession {
+  create(op: Extract<ClientOp, { op: "create" }>, origin: "hive" | "spawned" = "hive"): AgentSession {
     const d = this.store.getDefaults();
     const model = op.model || d.model;
     const used = new Set([...this.sessions.values()].map((x) => x.color.bg));
@@ -502,6 +517,7 @@ export class Hub {
       effort: op.effort || d.effort,
       permMode: op.permMode || d.permMode,
       cwd: expandHome(op.cwd?.trim() || d.cwd),
+      origin,
     });
     this.wire(s);
     this.sessions.set(s.sid, s);

@@ -29,7 +29,7 @@ describe("splitTasks", () => {
 
 describe("pickWorker", () => {
   const w = (over: Partial<WorkerView>): WorkerView =>
-    ({ sid: "x", state: "ready", duty: false, adopted: false, steering: false, lastT: 0, ...over });
+    ({ sid: "x", state: "ready", duty: false, origin: "hive", steering: false, lastT: 0, ...over });
 
   test("only a READY bean takes work; longest idle goes first", () => {
     expect(pickWorker([
@@ -43,10 +43,11 @@ describe("pickWorker", () => {
     expect(pickWorker([w({ sid: "new", state: "opening" })])).toBe("new");
   });
 
-  test("duty, adopted, steering, awaiting, blocked, awaitingBg are never fed", () => {
+  test("duty, adopted, spawned, steering, awaiting, blocked, awaitingBg are never fed", () => {
     expect(pickWorker([
       w({ sid: "d", duty: true }),
-      w({ sid: "e", adopted: true }),
+      w({ sid: "e", origin: "adopted" }),
+      w({ sid: "e2", origin: "spawned" }),
       w({ sid: "f", steering: true }),
       w({ sid: "g", state: "awaiting" }),
       w({ sid: "h", state: "blocked" }),
