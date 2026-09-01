@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { SPAWN_MAX_LIVE, spawnModelOk, spawnPlan } from "../server/tools";
+import { rosterWithDefault, SPAWN_MAX_LIVE, spawnModelOk, spawnPlan } from "../server/tools";
+
+describe("rosterWithDefault — the tray never lags the user's default", () => {
+  const roster = [{ value: "claude-fable-5[1m]", label: "Fable" }, { value: "haiku", label: "Haiku" }];
+  test("an unlisted default is prepended as a chip; a listed or 'default' one changes nothing", () => {
+    expect(rosterWithDefault(roster, "claude-fable-5-1")[0]).toEqual({ value: "claude-fable-5-1", label: "fable-5-1" });
+    expect(rosterWithDefault(roster, "haiku")).toBe(roster);
+    expect(rosterWithDefault(roster, "default")).toBe(roster);
+    expect(rosterWithDefault(roster, "")).toBe(roster);
+  });
+});
 
 describe("spawnModelOk — roster values, classic aliases, and full ids", () => {
   const roster = ["default", "opus[1m]", "claude-fable-5[1m]", "sonnet", "haiku"];

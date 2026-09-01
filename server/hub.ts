@@ -11,7 +11,7 @@ import { fmtEvery, loadRoster, parseEvery, saveRoster } from "./roster";
 import { TranscriptMirror } from "./mirror";
 import { readRompRegistry } from "./romp";
 import { AgentSession } from "./session";
-import { hiveMcpServer, notifyAllowed, spawnModelOk, spawnPlan, type BoardAccess } from "./tools";
+import { hiveMcpServer, notifyAllowed, rosterWithDefault, spawnModelOk, spawnPlan, type BoardAccess } from "./tools";
 import { Store, type SessionRow } from "./store";
 import { EFFORTS, MODELS, type ChatEvent, type ClientOp, type Defaults, type ModelChoice, type ServerMsg, type SessionSnap } from "./proto";
 
@@ -477,10 +477,11 @@ export class Hub {
     const shelf = [...loadRoster()].map(([name, e]) => ({
       name, every: e.every, ...(e.model ? { model: e.model } : {}), live: liveNames.has(name),
     }));
+    const d = this.store.getDefaults();
     return JSON.stringify({
       type: "defaults", host: (process.env.HIVE_NAME || hostname()).replace(/\.local$/, ""),
-      defaults: this.store.getDefaults(),
-      models: this.models, efforts: [...EFFORTS], shelf,
+      defaults: d,
+      models: rosterWithDefault(this.models, d.model), efforts: [...EFFORTS], shelf,
     } satisfies ServerMsg);
   }
 

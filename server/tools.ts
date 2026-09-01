@@ -44,6 +44,14 @@ export function spawnPlan(liveNames: string[], want: string, max = SPAWN_MAX_LIV
   return { ok: true, name: `${name}-${n}` };
 }
 
+// the tray always offers the user's configured default model, even when the CLI's
+// roster doesn't list it yet (a brand-new model id lands in defaults before the
+// roster learns it — the chip must not lag the user's own choice)
+export function rosterWithDefault(models: { value: string; label: string }[], defModel: string): { value: string; label: string }[] {
+  if (!defModel || defModel === "default" || models.some((m) => m.value === defModel)) return models;
+  return [{ value: defModel, label: defModel.replace(/^claude-/, "") }, ...models];
+}
+
 // what hive_spawn accepts as a model: a live roster value, a classic alias (the CLI
 // still resolves these even when the roster renames its values), or any full model id
 // (claude-*) — the API is the authority on those, and it fails loudly on a bad one.
